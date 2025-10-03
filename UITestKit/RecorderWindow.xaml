@@ -1,0 +1,21 @@
+﻿<Window x:Class="UITestKit.RecorderWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Recorder" Height="450" Width="800">
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="5">
+            <TextBox x:Name="txtClientInput" Width="400" Margin="0,0,5,0"/>
+            <Button Content="Send Input" Width="100" Click="BtnSendInput_Click"/>
+            <Button Content="Submit" Width="100" Margin="5,0,0,0" Click="BtnSubmit_Click"/>
+        </StackPanel>
+
+        <DataGrid x:Name="dgSteps" ItemsSource="{Binding Steps}" AutoGenerateColumns="False" Margin="5">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Step" Binding="{Binding StepNumber}" Width="50"/>
+                <DataGridTextColumn Header="Client Input" Binding="{Binding ClientInput}" Width="200"/>
+                <DataGridTextColumn Header="Client Output" Binding="{Binding ClientOutput}" Width="200"/>
+                <DataGridTextColumn Header="Server Output" Binding="{Binding ServerOutput}" Width="200"/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</Window>
