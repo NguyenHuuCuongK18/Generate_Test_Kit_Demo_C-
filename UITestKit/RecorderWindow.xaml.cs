@@ -1,6 +1,8 @@
 ﻿// UITestKit/RecorderWindow.xaml.cs
 using System.ComponentModel;
+using System.IO;
 using System.Windows;
+using UITestKit.MiddlewareHandling;
 using UITestKit.Model;
 using UITestKit.ServiceExcute;
 
@@ -10,14 +12,16 @@ namespace UITestKit
     {
         private readonly ExecutableManager _manager;
         private int _stepCounter = 0;
+        private string path = string.Empty;
+        private readonly MiddlewareStart _middlewareStart;
 
         public BindingList<TestStep> Steps { get; } = new BindingList<TestStep>();
 
-        public RecorderWindow(ExecutableManager manager)
+        public RecorderWindow(ExecutableManager manager,string path,MiddlewareStart middlewareStart)
         {
             InitializeComponent();
             DataContext = this;
-
+            _middlewareStart = middlewareStart;
             _manager = manager;
 
             // Subscribe sự kiện TRƯỚC khi start process để không bị miss output ban đầu
@@ -41,6 +45,12 @@ namespace UITestKit
         {
             var exporter = new ExcelExporter();
             exporter.ExportToExcel("TestCases.xlsx", Steps.ToList());
+            string pathExport = Path.Combine(path, "TestResult.xlsx");
+            exporter.ExportToExcelParams(pathExport,
+                ("TestSteps",Steps.Cast<object>().ToList()),
+                ("MiddleWare", _middlewareStart.LoggedRequests.Cast<object>().ToList())
+                );
+            _manager.StopAll();
             MessageBox.Show("Exported to TestCases.xlsx");
         }
 

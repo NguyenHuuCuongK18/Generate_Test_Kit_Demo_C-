@@ -1,16 +1,24 @@
 ﻿using Microsoft.Win32;
 using Ookii.Dialogs.Wpf;
-using System;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Forms;
+using UITestKit.MiddlewareHandling;
+using UITestKit.Model;
 using UITestKit.ServiceExcute;
+using UITestKit.ServiceSetting;
+using UITestKit.Views;
+using MessageBox = System.Windows.MessageBox;
+using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
 
 namespace UITestKit
 {
     public partial class MainWindow : Window
     {
         private ExecutableManager _manager = new ExecutableManager();
-
+        private MiddlewareStart _middlewareStart = new MiddlewareStart();
         // Luôn lưu config vào AppData để chắc chắn có quyền ghi
         private readonly string _configFolder =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "UITestKit");
@@ -57,7 +65,7 @@ namespace UITestKit
                 txtSaveLocation.Text = dialog.SelectedPath;
         }
 
-        private void BtnSave_Click(object sender, RoutedEventArgs e)
+        private async void BtnSave_Click(object sender, RoutedEventArgs e)
         {
             try
             {
@@ -65,11 +73,17 @@ namespace UITestKit
                 string serverPath = txtServerPath.Text.Trim();
                 string saveLocation = txtSaveLocation.Text.Trim();
                 string projectName = txtProjectName.Text.Trim();
+                string templateClient = txtClientAppSettings.Text.Trim();
+                string templateServer = txtServerAppSettings.Text.Trim();
+                string protocol = ((ComboBoxItem)cbProtocol.SelectedItem).Content.ToString();
 
                 if (string.IsNullOrWhiteSpace(clientPath) ||
                     string.IsNullOrWhiteSpace(serverPath) ||
                     string.IsNullOrWhiteSpace(saveLocation) ||
-                    string.IsNullOrWhiteSpace(projectName))
+                    string.IsNullOrWhiteSpace(projectName) ||
+                    string.IsNullOrEmpty(templateClient) ||
+                    string.IsNullOrEmpty(templateServer) ||
+                    string.IsNullOrEmpty(protocol))
                 {
                     MessageBox.Show("Please fill all fields.", "Validation Error",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -81,37 +95,82 @@ namespace UITestKit
                     ClientPath = clientPath,
                     ServerPath = serverPath,
                     SaveLocation = saveLocation,
-                    ProjectName = projectName
+                    ProjectName = projectName,
+                    Protocol = protocol,
                 };
 
                 string json = System.Text.Json.JsonSerializer.Serialize(config,
                     new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
 
                 File.WriteAllText(_configFilePath, json);
+                // Ghi de appsettings
+                string destServer = Path.GetDirectoryName(serverPath)!;
+                AppSettingHandling.ReplaceAppSetting(templateServer, destServer,"appsettings.json",replaceOnlyPublish: false);
+                string destClient = Path.GetDirectoryName(clientPath)!;
+                AppSettingHandling.ReplaceAppSetting(templateClient, destClient, "appsettings.json", false);
+
 
                 // Start exe
                 _manager.Init(clientPath, serverPath);
 
-                var recorder = new RecorderWindow(_manager);
+                var recorder = new RecorderWindow(_manager,saveLocation,_middlewareStart);
                 recorder.Show();
 
-                _manager.StartBoth();
+                _manager.StartServer();
+                if (protocol.Equals("HTTP", StringComparison.OrdinalIgnoreCase))
+                {
+                    await _middlewareStart.StartAsync(useHttp: true);
+                }
+                else if (protocol.Equals("TCP", StringComparison.OrdinalIgnoreCase))
+                {
+                    await _middlewareStart.StartAsync(useHttp: false);
+                }
+                _manager.StartClient();
+                var middlewareView = new MiddlewareView(_middlewareStart);
+                middlewareView.Show();
 
-                MessageBox.Show($"Configuration saved to:\n{_configFilePath}", "Success",
+                System.Windows.MessageBox.Show($"Configuration saved to:\n{_configFilePath}", "Success",
                     MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error saving config:\n{ex.Message}", "Error",
+                System.Windows.MessageBox.Show($"Error saving config:\n{ex.Message}", "Error",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
         private void BtnCancel_Click(object sender, RoutedEventArgs e)
         {
-            _manager.StopBoth();
+            _manager.StopAll();
             Close();
         }
+
+        private void BtnBrowseClientAppSettings_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*",
+                Title = "Select Client appsettings.json"
+            };
+            if (dlg.ShowDialog() == true)
+            {
+                txtClientAppSettings.Text = dlg.FileName;
+            }
+        }
+
+        private void BtnBrowseServerAppSettings_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*",
+                Title = "Select Server appsettings.json"
+            };
+            if (dlg.ShowDialog() == true)
+            {
+                txtServerAppSettings.Text = dlg.FileName;
+            }
+        }
+
 
         private void LoadConfig()
         {
@@ -133,17 +192,11 @@ namespace UITestKit
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error loading config:\n{ex.Message}", "Error",
+                System.Windows.MessageBox.Show($"Error loading config:\n{ex.Message}", "Error",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
     }
 
-    public class ConfigModel
-    {
-        public string ClientPath { get; set; } = string.Empty;
-        public string ServerPath { get; set; } = string.Empty;
-        public string SaveLocation { get; set; } = string.Empty;
-        public string ProjectName { get; set; } = string.Empty;
-    }
+   
 }

@@ -1,7 +1,8 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace UITestKit.ServiceExcute
 {
@@ -10,17 +11,22 @@ namespace UITestKit.ServiceExcute
         private Process? _clientProcess;
         private Process? _serverProcess;
 
-        // Events để UI subscribe
         public event Action<string>? ClientOutputReceived;
         public event Action<string>? ServerOutputReceived;
 
         private readonly string _debugFolder =
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "process_logs");
 
-        public void Init(string clientPath, string serverPath)
+        public ExecutableManager()
         {
             Directory.CreateDirectory(_debugFolder);
+        }
 
+        /// <summary>
+        /// Khởi tạo sẵn thông tin process mà chưa chạy.
+        /// </summary>
+        public void Init(string clientPath, string serverPath)
+        {
             _clientProcess = CreateProcess(clientPath, msg =>
             {
                 ClientOutputReceived?.Invoke(msg);
@@ -36,6 +42,9 @@ namespace UITestKit.ServiceExcute
 
         private Process CreateProcess(string exePath, Action<string> onOutput, string role)
         {
+            if (!File.Exists(exePath))
+                throw new FileNotFoundException($"Executable not found: {exePath}");
+
             var process = new Process
             {
                 StartInfo = new ProcessStartInfo
@@ -45,49 +54,91 @@ namespace UITestKit.ServiceExcute
                     RedirectStandardError = true,
                     RedirectStandardInput = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8
                 },
                 EnableRaisingEvents = true
             };
 
-            process.OutputDataReceived += (s, e) =>
-            {
-                if (!string.IsNullOrWhiteSpace(e.Data))
-                {
-                    var filtered = FilterOutput(e.Data);
-                    if (!string.IsNullOrEmpty(filtered))
-                        onOutput(filtered);
-                }
-            };
-
-            process.ErrorDataReceived += (s, e) =>
-            {
-                if (!string.IsNullOrWhiteSpace(e.Data))
-                {
-                    var filtered = FilterOutput(e.Data);
-                    if (!string.IsNullOrEmpty(filtered))
-                        onOutput($"[ERR] {filtered}");
-                }
-            };
+            process.Exited += (s, e) => onOutput($"[{role}] exited.");
 
             return process;
         }
 
-        public void StartBoth()
+        #region Start/Stop
+
+        /// <summary>
+        /// Chạy server trước để middleware có thể kết nối.
+        /// </summary>
+        public void StartServer()
         {
-            if (_clientProcess == null || _serverProcess == null)
-                throw new InvalidOperationException("Processes not initialized. Call Init(...) first.");
+            if (_serverProcess == null)
+                throw new InvalidOperationException("Server process not initialized.");
 
-            _clientProcess.Start();
-            _clientProcess.BeginOutputReadLine();
-            _clientProcess.BeginErrorReadLine();
-
-            _serverProcess.Start();
-            _serverProcess.BeginOutputReadLine();
-            _serverProcess.BeginErrorReadLine();
+            StartProcessAndMonitor(_serverProcess, msg => ServerOutputReceived?.Invoke(msg), "server.log");
         }
 
-        public void StopBoth()
+        /// <summary>
+        /// Chạy client sau khi middleware đã sẵn sàng.
+        /// </summary>
+        public void StartClient()
+        {
+            if (_clientProcess == null)
+                throw new InvalidOperationException("Client process not initialized.");
+
+            StartProcessAndMonitor(_clientProcess, msg => ClientOutputReceived?.Invoke(msg), "client.log");
+        }
+
+        /// <summary>
+        /// Trước đây là StartBoth, giữ lại nếu cần chạy song song.
+        /// </summary>
+        public void StartBoth()
+        {
+            StartServer();
+            StartClient();
+        }
+
+        private void StartProcessAndMonitor(Process process, Action<string> onOutput, string logFile)
+        {
+            process.Start();
+
+            // Đọc output liên tục (kể cả Console.Write)
+            Task.Run(async () =>
+            {
+                var reader = process.StandardOutput;
+                char[] buffer = new char[256];
+                int read;
+                while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    string chunk = new(buffer, 0, read);
+                    if (!string.IsNullOrEmpty(chunk))
+                    {
+                        onOutput(chunk);
+                        AppendDebugFile(logFile, chunk);
+                    }
+                }
+            });
+
+            // Đọc error stream
+            Task.Run(async () =>
+            {
+                var errReader = process.StandardError;
+                char[] buffer = new char[256];
+                int read;
+                while ((read = await errReader.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    string chunk = new(buffer, 0, read);
+                    if (!string.IsNullOrEmpty(chunk))
+                    {
+                        onOutput("[ERR] " + chunk);
+                        AppendDebugFile(logFile, "[ERR] " + chunk);
+                    }
+                }
+            });
+        }
+
+        public void StopAll()
         {
             StopProcess(ref _clientProcess);
             StopProcess(ref _serverProcess);
@@ -101,11 +152,9 @@ namespace UITestKit.ServiceExcute
             {
                 if (!process.HasExited)
                 {
-                    // Nếu process có UI thì thử đóng "mềm"
                     process.CloseMainWindow();
-                    if (!process.WaitForExit(2000)) // chờ 2 giây
+                    if (!process.WaitForExit(2000))
                     {
-                        // Nếu vẫn chưa thoát thì kill cứng
                         process.Kill(true);
                         process.WaitForExit();
                     }
@@ -121,6 +170,9 @@ namespace UITestKit.ServiceExcute
                 process = null;
             }
         }
+        #endregion
+
+        #region Input/Output
 
         public void SendClientInput(string input)
         {
@@ -146,14 +198,6 @@ namespace UITestKit.ServiceExcute
             catch { }
         }
 
-        private string FilterOutput(string raw)
-        {
-            string[] ignoreKeywords = { "system", "debug", "info" };
-
-            if (ignoreKeywords.Any(k => raw.Contains(k, StringComparison.OrdinalIgnoreCase)))
-                return string.Empty;
-
-            return raw.Trim();
-        }
+        #endregion
     }
 }
