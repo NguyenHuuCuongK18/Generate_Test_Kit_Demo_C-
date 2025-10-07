@@ -5,6 +5,9 @@
     <Compile Update="MiddlewareView.xaml.cs">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Update="ProgressDialog.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Update="RecorderWindow.xaml.cs">
       <SubType>Code</SubType>
     </Compile>

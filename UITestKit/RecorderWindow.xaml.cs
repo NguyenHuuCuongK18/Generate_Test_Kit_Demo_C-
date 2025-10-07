@@ -1,27 +1,28 @@
 ﻿// UITestKit/RecorderWindow.xaml.cs
 using System.ComponentModel;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using UITestKit.MiddlewareHandling;
 using UITestKit.Model;
 using UITestKit.ServiceExcute;
+using UITestKit.Views;
 
 namespace UITestKit
 {
     public partial class RecorderWindow : Window
     {
-        private readonly ExecutableManager _manager;
+        private readonly ExecutableManager _manager = ExecutableManager.Instance;
         private int _stepCounter = 0;
         private string path = string.Empty;
-        private readonly MiddlewareStart _middlewareStart;
+        private readonly MiddlewareStart _middlewareStart = MiddlewareStart.Instance;
 
         public BindingList<TestStep> Steps { get; } = new BindingList<TestStep>();
 
-        public RecorderWindow(ExecutableManager manager,string path,MiddlewareStart middlewareStart)
+        public RecorderWindow(ExecutableManager manager,string path)
         {
             InitializeComponent();
             DataContext = this;
-            _middlewareStart = middlewareStart;
             _manager = manager;
 
             // Subscribe sự kiện TRƯỚC khi start process để không bị miss output ban đầu
@@ -41,18 +42,44 @@ namespace UITestKit
             }
         }
 
-        private void BtnSubmit_Click(object sender, RoutedEventArgs e)
+        private async void BtnSubmit_Click(object sender, RoutedEventArgs e)
         {
             var exporter = new ExcelExporter();
-            exporter.ExportToExcel("TestCases.xlsx", Steps.ToList());
+            //exporter.ExportToExcel("TestCases.xlsx", Steps.ToList());
             string pathExport = Path.Combine(path, "TestResult.xlsx");
             exporter.ExportToExcelParams(pathExport,
                 ("TestSteps",Steps.Cast<object>().ToList()),
                 ("MiddleWare", _middlewareStart.LoggedRequests.Cast<object>().ToList())
                 );
-            _manager.StopAll();
+            await _manager.StopAllAsync();
             MessageBox.Show("Exported to TestCases.xlsx");
         }
+
+        private async void BtnCloseAll_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                 await _manager.StopAllAsync();
+                _middlewareStart.Stop();
+                // Lặp qua tất cả các cửa sổ đang mở
+                foreach (Window window in Application.Current.Windows)
+                {
+                    if (window is MiddlewareView || window is RecorderWindow)
+                    {
+                        window.Close();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Đã xảy ra lỗi khi đóng cửa sổ: {ex.Message}",
+                                "Error",
+                                MessageBoxButton.OK,
+                                MessageBoxImage.Error);
+            }
+        }
+
+
 
         private void AddStep(string? clientInput = null, string? clientOutput = null, string? serverOutput = null)
         {

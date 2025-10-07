@@ -17,8 +17,9 @@ namespace UITestKit
 {
     public partial class MainWindow : Window
     {
-        private ExecutableManager _manager = new ExecutableManager();
-        private MiddlewareStart _middlewareStart = new MiddlewareStart();
+        private readonly ExecutableManager _manager = ExecutableManager.Instance;
+        private readonly MiddlewareStart _middlewareStart = MiddlewareStart.Instance;
+
         // Luôn lưu config vào AppData để chắc chắn có quyền ghi
         private readonly string _configFolder =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "UITestKit");
@@ -113,7 +114,7 @@ namespace UITestKit
                 // Start exe
                 _manager.Init(clientPath, serverPath);
 
-                var recorder = new RecorderWindow(_manager,saveLocation,_middlewareStart);
+                var recorder = new RecorderWindow(_manager,saveLocation);
                 recorder.Show();
 
                 _manager.StartServer();

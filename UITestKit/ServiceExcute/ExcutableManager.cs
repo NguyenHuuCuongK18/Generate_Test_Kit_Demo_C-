@@ -3,11 +3,16 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
+using System.Windows;
 
 namespace UITestKit.ServiceExcute
 {
     public class ExecutableManager
     {
+        private static readonly Lazy<ExecutableManager> _instance =
+            new(() => new ExecutableManager());
+        public static ExecutableManager Instance => _instance.Value;
+
         private Process? _clientProcess;
         private Process? _serverProcess;
 
@@ -197,6 +202,74 @@ namespace UITestKit.ServiceExcute
             }
             catch { }
         }
+
+        public async Task StopAllAsync()
+        {
+            try
+            {
+                // Gọi UI loading dialog
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    var dialog = new ProgressDialog("Đang dừng tất cả tiến trình...", 4000);
+                    dialog.Owner = Application.Current.MainWindow;
+                    dialog.ShowDialog();
+                });
+
+                await StopProcessAsync(_clientProcess, "Client");
+                await StopProcessAsync(_serverProcess, "Server");
+
+                _clientProcess = null;
+                _serverProcess = null;
+
+                MessageBox.Show("Tất cả tiến trình đã được dừng thành công.", "Thông báo", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"[StopAllAsync ERR] {ex.Message}", "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+
+        private async Task StopProcessAsync(Process? process, string role)
+        {
+            if (process == null) return;
+
+            try
+            {
+                if (!process.HasExited)
+                {
+                    bool hasWindow = process.MainWindowHandle != IntPtr.Zero;
+
+                    if (hasWindow)
+                    {
+                        process.CloseMainWindow();
+                        if (await WaitForExitAsync(process, 2000))
+                        {
+                            AppendDebugFile($"{role.ToLower()}.log", $"[{role}] closed normally.");
+                            return;
+                        }
+                    }
+
+                    process.Kill(true);
+                    await WaitForExitAsync(process, 3000);
+                    AppendDebugFile($"{role.ToLower()}.log", $"[{role}] killed by manager.");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendDebugFile($"{role.ToLower()}.log", $"[StopProcess ERR] {ex}");
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        private static Task<bool> WaitForExitAsync(Process process, int milliseconds)
+        {
+            return Task.Run(() => process.WaitForExit(milliseconds));
+        }
+
 
         #endregion
     }

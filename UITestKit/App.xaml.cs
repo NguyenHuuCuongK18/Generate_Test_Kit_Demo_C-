@@ -1,6 +1,8 @@
 ﻿using System.Configuration;
 using System.Data;
+using System.Threading.Tasks;
 using System.Windows;
+using UITestKit.MiddlewareHandling;
 using UITestKit.ServiceExcute;
 
 namespace UITestKit
@@ -10,18 +12,12 @@ namespace UITestKit
     /// </summary>
     public partial class App : Application
     {
-        private static ExecutableManager? _executableManager;
 
-        // Hàm khởi tạo ExecutableManager ở đâu đó trong app (ví dụ khi MainWindow mở)
-        public static void SetExecutableManager(ExecutableManager manager)
-        {
-            _executableManager = manager;
-        }
-
-        protected override void OnExit(ExitEventArgs e)
+        protected override async void OnExit(ExitEventArgs e)
         {
             // Gọi StopBoth() khi đóng app
-            _executableManager?.StopAll();
+            await ExecutableManager.Instance.StopAllAsync();
+            MiddlewareStart.Instance.Stop();
             base.OnExit(e);
         }
     }

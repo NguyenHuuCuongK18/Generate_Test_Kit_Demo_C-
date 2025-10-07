@@ -1,7 +1,5 @@
 ﻿using OfficeOpenXml;
 using OfficeOpenXml.Style;
-using System.Collections.Generic;
-using System.ComponentModel;
 using System.IO;
 using System.Reflection;
 using UITestKit.Model;
@@ -59,28 +57,33 @@ public class ExcelExporter
     /// <param name="sheetsData">Danh sách sheet với tên sheet và dữ liệu tương ứng.</param>
     public void ExportToExcelParams(string filePath, params (string SheetName, ICollection<object> Data)[] sheetsData)
     {
-        if (sheetsData == null || sheetsData.Length == 0)
-            throw new System.ArgumentException("Không có dữ liệu để xuất.");
-
-        using (var package = new ExcelPackage())
+        try
         {
+            if (sheetsData == null || sheetsData.Length == 0)
+                throw new ArgumentException("Không có dữ liệu để xuất.");
+
+            // ===== Đảm bảo thư mục tồn tại =====
+            var dir = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            using var package = new ExcelPackage();
+
             foreach (var (sheetName, data) in sheetsData)
             {
-                if (data == null || data.Count == 0)
-                    continue;
+                if (data == null || data.Count == 0) continue;
 
-                var firstItem = data.FirstOrDefault();
+                var firstItem = data.FirstOrDefault(d => d != null);
                 if (firstItem == null) continue;
 
                 var worksheet = package.Workbook.Worksheets.Add(sheetName);
 
                 var properties = firstItem.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                var getters = properties.Select(p => (Func<object, object>)(obj => p.GetValue(obj))).ToArray();
 
                 // ===== HEADER =====
                 for (int i = 0; i < properties.Length; i++)
-                {
                     worksheet.Cells[1, i + 1].Value = properties[i].Name;
-                }
 
                 using (var headerRange = worksheet.Cells[1, 1, 1, properties.Length])
                 {
@@ -93,19 +96,50 @@ public class ExcelExporter
                 int row = 2;
                 foreach (var item in data)
                 {
-                    for (int col = 0; col < properties.Length; col++)
+                    if (item == null) continue;
+                    for (int col = 0; col < getters.Length; col++)
                     {
-                        var value = properties[col].GetValue(item, null);
-                        worksheet.Cells[row, col + 1].Value = value;
+                        var value = getters[col](item);
+                        worksheet.Cells[row, col + 1].Value = value?.ToString();
                     }
                     row++;
                 }
 
-                worksheet.Cells.AutoFitColumns();
+                if (row < 2000)
+                    worksheet.Cells.AutoFitColumns();
             }
 
-            // ===== SAVE FILE =====
+            // ===== Lưu file =====
             package.SaveAs(new FileInfo(filePath));
         }
+        catch (Exception ex)
+        {
+            try
+            {
+                string logPath = Path.Combine(
+                    Path.GetDirectoryName(filePath) ?? AppDomain.CurrentDomain.BaseDirectory,
+                    "ExportLog.txt"
+                );
+
+                File.AppendAllText(logPath,
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Lỗi khi export Excel:\n{ex}\n\n");
+
+                System.Windows.MessageBox.Show(
+                    $"Xuất Excel thất bại!\nChi tiết lỗi đã được ghi tại:\n{logPath}",
+                    "Export Error",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error
+                );
+            }
+            catch
+            {
+                // Nếu ghi log cũng lỗi thì ít nhất hiển thị message
+                System.Windows.MessageBox.Show($"Export Excel thất bại: {ex.Message}",
+                    "Export Error",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+            }
+        }
     }
+
 }

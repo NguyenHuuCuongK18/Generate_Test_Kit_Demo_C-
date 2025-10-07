@@ -12,8 +12,17 @@ using UITestKit.Service;
 
 namespace UITestKit.MiddlewareHandling
 {
-    public class MiddlewareStart
+    public sealed class MiddlewareStart
     {
+        #region Singleton
+        private static readonly Lazy<MiddlewareStart> _instance =
+            new(() => new MiddlewareStart());
+
+        public static MiddlewareStart Instance => _instance.Value;
+
+        private MiddlewareStart() { }
+        #endregion
+
         private CancellationTokenSource? _cts;
         private bool _isSessionRunning;
 
@@ -25,13 +34,12 @@ namespace UITestKit.MiddlewareHandling
 
         public ObservableCollection<LoggedRequest> LoggedRequests { get; } = new();
 
-        public MiddlewareStart() { }
-
         #region Start / Stop
 
         public async Task StartAsync(bool useHttp = true)
         {
-            if (_isSessionRunning) return;
+            if (_isSessionRunning)
+                return;
 
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
@@ -49,15 +57,48 @@ namespace UITestKit.MiddlewareHandling
             await Task.CompletedTask;
         }
 
+        /// <summary>
+        /// Dừng toàn bộ middleware proxy và giải phóng tài nguyên.
+        /// </summary>
         public void Stop()
         {
             try
             {
-                _cts?.Cancel();
+                if (!_isSessionRunning) return;
+
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    var dialog = new ProgressDialog("Đang dừng Middleware Proxy...", 3000);
+                    dialog.Owner = Application.Current.MainWindow;
+                    dialog.ShowDialog();
+                });
+
                 _isSessionRunning = false;
 
-                _httpListener?.Stop();
-                _tcpListener?.Stop();
+                _cts?.Cancel();
+                _cts?.Dispose();
+                _cts = null;
+
+                if (_httpListener != null && _httpListener.IsListening)
+                {
+                    _httpListener.Stop();
+                    _httpListener.Close();
+                    _httpListener = null;
+                }
+
+                if (_tcpListener != null)
+                {
+                    _tcpListener.Stop();
+                    _tcpListener = null;
+                }
+
+                AppendToFile(new LoggedRequest
+                {
+                    Method = "SYSTEM",
+                    Url = "Proxy stopped",
+                    RequestBody = "Middleware stopped gracefully.",
+                    StatusCode = 0
+                });
             }
             catch (Exception ex)
             {
@@ -78,6 +119,13 @@ namespace UITestKit.MiddlewareHandling
                 _httpListener.Start();
 
                 Task.Run(() => ListenForHttpRequests(token), token);
+                AppendToFile(new LoggedRequest
+                {
+                    Method = "SYSTEM",
+                    Url = "HTTP Proxy",
+                    RequestBody = $"HTTP proxy started on port {PROXY_PORT}",
+                    StatusCode = 1
+                });
             }
             catch (Exception ex)
             {
@@ -127,16 +175,16 @@ namespace UITestKit.MiddlewareHandling
 
                 if (!string.IsNullOrEmpty(logEntry.RequestBody))
                 {
-                    forwardRequest.Content = new StringContent(
-                        logEntry.RequestBody,
-                        Encoding.UTF8,
-                        request.ContentType ?? "application/json"
-                    );
+                    var mediaType = request.ContentType?.Split(';')[0].Trim() ?? "application/json";
+                    forwardRequest.Content = new StringContent(logEntry.RequestBody, Encoding.UTF8, mediaType);
                 }
+
 
                 var responseMessage = await client.SendAsync(forwardRequest);
                 var responseBytes = await responseMessage.Content.ReadAsByteArrayAsync();
+                var dataType = DataInspector.DetecDataType(responseBytes);
 
+                logEntry.DataType = dataType;
                 logEntry.StatusCode = (int)responseMessage.StatusCode;
                 logEntry.ResponseBody = Encoding.UTF8.GetString(responseBytes);
 
@@ -169,6 +217,13 @@ namespace UITestKit.MiddlewareHandling
                 _tcpListener.Start();
 
                 Task.Run(() => ListenForTcpConnections(token), token);
+                AppendToFile(new LoggedRequest
+                {
+                    Method = "SYSTEM",
+                    Url = "TCP Proxy",
+                    RequestBody = $"TCP proxy started on port {PROXY_PORT}",
+                    StatusCode = 1
+                });
             }
             catch (Exception ex)
             {
