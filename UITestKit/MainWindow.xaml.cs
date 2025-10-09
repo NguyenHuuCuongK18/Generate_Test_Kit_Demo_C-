@@ -113,6 +113,7 @@ namespace UITestKit
 
                 // Start exe
                 _manager.Init(clientPath, serverPath);
+                _manager.InitializeIgnoreList("");
 
                 var recorder = new RecorderWindow(_manager,saveLocation);
                 recorder.Show();

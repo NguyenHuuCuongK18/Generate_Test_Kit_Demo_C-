@@ -1,9 +1,11 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO;
+using System.Security.RightsManagement;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
+using UITestKit.Service;
 
 namespace UITestKit.ServiceExcute
 {
@@ -12,6 +14,7 @@ namespace UITestKit.ServiceExcute
         private static readonly Lazy<ExecutableManager> _instance =
             new(() => new ExecutableManager());
         public static ExecutableManager Instance => _instance.Value;
+        private HashSet<string> _ignoreTexts = new HashSet<string>();
 
         private Process? _clientProcess;
         private Process? _serverProcess;
@@ -26,6 +29,34 @@ namespace UITestKit.ServiceExcute
         {
             Directory.CreateDirectory(_debugFolder);
         }
+        //load list ignore
+        public void InitializeIgnoreList(string excelPath)
+        {
+            try
+            {
+                var file = Path.Combine("D:\\CSharp_Project\\TestKitGenerator", "Ignore.xlsx");
+                _ignoreTexts = IgnoreListLoader.IgnoreLoader(file);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Không thể load file ignore: {ex.Message}");
+                _ignoreTexts = new HashSet<string>();
+            }
+        }
+        // method check isIgnore
+        private bool ShouldIgnore(string line)
+        {
+            if (_ignoreTexts == null || _ignoreTexts.Count == 0)
+                return false;
+
+            foreach (var ignore in _ignoreTexts)
+            {
+                if (line.Contains(ignore, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
 
         /// <summary>
         /// Khởi tạo sẵn thông tin process mà chưa chạy.
@@ -114,16 +145,37 @@ namespace UITestKit.ServiceExcute
                 var reader = process.StandardOutput;
                 char[] buffer = new char[256];
                 int read;
+                string leftover = string.Empty;
+
                 while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
                 {
-                    string chunk = new(buffer, 0, read);
-                    if (!string.IsNullOrEmpty(chunk))
+                    string chunk = leftover + new string(buffer, 0, read);
+                    var lines = chunk.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+
+                    // Nếu chunk KHÔNG kết thúc bằng newline, thì dòng cuối bị cắt dở -> lưu lại
+                    if (!chunk.EndsWith("\n") && !chunk.EndsWith("\r"))
                     {
-                        onOutput(chunk);
-                        AppendDebugFile(logFile, chunk);
+                        leftover = lines[^1];
+                        lines = lines.Take(lines.Length - 1).ToArray();
+                    }
+                    else
+                    {
+                        leftover = string.Empty;
+                    }
+
+                    foreach (var line in lines)
+                    {
+                        if (string.IsNullOrWhiteSpace(line)) continue;
+                        if (ShouldIgnore(line)) continue;
+                        onOutput(line);
                     }
                 }
+
+                // Flush dòng cuối cùng nếu còn sót
+                if (!string.IsNullOrWhiteSpace(leftover))
+                    onOutput(leftover);
             });
+
 
             // Đọc error stream
             Task.Run(async () =>
@@ -185,12 +237,6 @@ namespace UITestKit.ServiceExcute
                 _clientProcess.StandardInput.WriteLine(input);
         }
 
-        public void SendServerInput(string input)
-        {
-            if (_serverProcess != null && !_serverProcess.HasExited)
-                _serverProcess.StandardInput.WriteLine(input);
-        }
-
         private void AppendDebugFile(string fileName, string text)
         {
             try
@@ -205,29 +251,45 @@ namespace UITestKit.ServiceExcute
 
         public async Task StopAllAsync()
         {
+            ProgressDialog? dialog = null;
             try
             {
-                // Gọi UI loading dialog
+                // Hiển thị loading dialog không chặn
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
-                    var dialog = new ProgressDialog("Đang dừng tất cả tiến trình...", 4000);
+                    dialog = new ProgressDialog("Đang dừng tất cả tiến trình...");
                     dialog.Owner = Application.Current.MainWindow;
-                    dialog.ShowDialog();
+                    dialog.Show(); // Không dùng ShowDialog -> không chặn luồng
                 });
 
-                await StopProcessAsync(_clientProcess, "Client");
-                await StopProcessAsync(_serverProcess, "Server");
+                // Dừng tiến trình song song
+                var stopClientTask = StopProcessAsync(_clientProcess, "Client");
+                var stopServerTask = StopProcessAsync(_serverProcess, "Server");
+
+                await Task.WhenAll(stopClientTask, stopServerTask);
 
                 _clientProcess = null;
                 _serverProcess = null;
 
-                MessageBox.Show("Tất cả tiến trình đã được dừng thành công.", "Thông báo", MessageBoxButton.OK, MessageBoxImage.Information);
+                // Đóng dialog sau khi dừng xong
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    dialog?.Close();
+                    MessageBox.Show("Tất cả tiến trình đã được dừng thành công.",
+                        "Thông báo", MessageBoxButton.OK, MessageBoxImage.Information);
+                });
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"[StopAllAsync ERR] {ex.Message}", "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    dialog?.Close();
+                    MessageBox.Show($"[StopAllAsync ERR] {ex.Message}",
+                        "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
+                });
             }
         }
+
 
 
         private async Task StopProcessAsync(Process? process, string role)

@@ -3,10 +3,13 @@ using System.ComponentModel;
 using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Forms;
 using UITestKit.MiddlewareHandling;
 using UITestKit.Model;
 using UITestKit.ServiceExcute;
 using UITestKit.Views;
+using Application = System.Windows.Application;
+using MessageBox = System.Windows.MessageBox;
 
 namespace UITestKit
 {
@@ -18,6 +21,11 @@ namespace UITestKit
         private readonly MiddlewareStart _middlewareStart = MiddlewareStart.Instance;
 
         public BindingList<TestStep> Steps { get; } = new BindingList<TestStep>();
+        public BindingList<Input_Client> InputClients { get; } = new BindingList<Input_Client>();
+        public BindingList<OutputClient> OutputClients { get; } = new BindingList<OutputClient>();
+        public BindingList<OutputServer> OutputServers { get; } = new BindingList<OutputServer>();
+
+
 
         public RecorderWindow(ExecutableManager manager,string path)
         {
