@@ -1,14 +1,17 @@
-﻿using System.Collections.ObjectModel;
+﻿using OfficeOpenXml.ConditionalFormatting.Contracts;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
-using System.Windows;
-using UITestKit.Model;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows;
+using UITestKit.Model;
 using UITestKit.Service;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.Window;
 
 namespace UITestKit.MiddlewareHandling
 {
@@ -17,11 +20,11 @@ namespace UITestKit.MiddlewareHandling
         #region Singleton
         private static readonly Lazy<MiddlewareStart> _instance =
             new(() => new MiddlewareStart());
-
         public static MiddlewareStart Instance => _instance.Value;
-
         private MiddlewareStart() { }
         #endregion
+
+        public RecorderWindow? Recorder { get; set; }
 
         private CancellationTokenSource? _cts;
         private bool _isSessionRunning;
@@ -31,8 +34,6 @@ namespace UITestKit.MiddlewareHandling
 
         private const int PROXY_PORT = 5000;       // Port client kết nối đến
         private const int REAL_SERVER_PORT = 5001; // Port server thực
-
-        public ObservableCollection<LoggedRequest> LoggedRequests { get; } = new();
 
         #region Start / Stop
 
@@ -60,19 +61,23 @@ namespace UITestKit.MiddlewareHandling
         /// <summary>
         /// Dừng toàn bộ middleware proxy và giải phóng tài nguyên.
         /// </summary>
-        public void Stop()
+        public async Task StopAsync()  // Đổi tên thành StopAsync để rõ ràng async
         {
+            ProgressDialog? dialog = null;
             try
             {
                 if (!_isSessionRunning) return;
 
-                Application.Current.Dispatcher.Invoke(() =>
+
+                // Show dialog async, non-modal (không chặn)
+                await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
-                    var dialog = new ProgressDialog("Đang dừng Middleware Proxy...", 3000);
+                    dialog = new ProgressDialog("Đang dừng Middleware Proxy...");
                     dialog.Owner = Application.Current.MainWindow;
-                    dialog.ShowDialog();
+                    dialog.Show();  // Sử dụng Show() thay ShowDialog()
                 });
 
+                // Chạy stop logic ngay lập tức (không bị chặn)
                 _isSessionRunning = false;
 
                 _cts?.Cancel();
@@ -92,6 +97,7 @@ namespace UITestKit.MiddlewareHandling
                     _tcpListener = null;
                 }
 
+                // Log (giữ nguyên, nhưng nếu log chậm, có thể làm async sau)
                 AppendToFile(new LoggedRequest
                 {
                     Method = "SYSTEM",
@@ -99,10 +105,22 @@ namespace UITestKit.MiddlewareHandling
                     RequestBody = "Middleware stopped gracefully.",
                     StatusCode = 0
                 });
+
+                // Close dialog sau khi done
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    dialog?.Close();
+                });
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[MiddlewareStop ERR] {ex.Message}");
+
+                // Đảm bảo close dialog nếu error
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    dialog?.Close();
+                });
             }
         }
 
@@ -119,13 +137,6 @@ namespace UITestKit.MiddlewareHandling
                 _httpListener.Start();
 
                 Task.Run(() => ListenForHttpRequests(token), token);
-                AppendToFile(new LoggedRequest
-                {
-                    Method = "SYSTEM",
-                    Url = "HTTP Proxy",
-                    RequestBody = $"HTTP proxy started on port {PROXY_PORT}",
-                    StatusCode = 1
-                });
             }
             catch (Exception ex)
             {
@@ -156,37 +167,62 @@ namespace UITestKit.MiddlewareHandling
         private async Task ProcessHttpRequest(HttpListenerContext context)
         {
             var request = context.Request;
-            var logEntry = new LoggedRequest
-            {
-                Method = request.HttpMethod,
-                Url = request.Url?.ToString() ?? ""
-            };
+            string requestBody;
 
-            using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
+            using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
+            requestBody = reader.ReadToEnd();
+
+            // get and detect dataType
+            var requestBytes = request.ContentEncoding.GetBytes(requestBody);
+            var requestDataType = DataInspector.DetecDataType(requestBytes);
+            if (Recorder != null && Recorder.InputClients.Any())
             {
-                logEntry.RequestBody = await reader.ReadToEndAsync();
+                // intial OutputServer(bắt request gửi đến server)
+                var stage = Recorder.InputClients.Last().Stage;
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    Recorder.OutputServers.Add(new OutputServer
+                    {
+                        Stage = stage,
+                        Method = request.HttpMethod,
+                        DataTypeMiddleware = requestDataType,
+                        ByteSize = requestBytes.Length,
+                        DataRequest = requestBody,
+                    });
+                });
             }
+
 
             try
             {
                 var realServerUrl = $"http://localhost:{REAL_SERVER_PORT}{request.Url?.AbsolutePath}";
                 using var client = new HttpClient();
                 var forwardRequest = new HttpRequestMessage(new HttpMethod(request.HttpMethod), realServerUrl);
-
-                if (!string.IsNullOrEmpty(logEntry.RequestBody))
-                {
-                    var mediaType = request.ContentType?.Split(';')[0].Trim() ?? "application/json";
-                    forwardRequest.Content = new StringContent(logEntry.RequestBody, Encoding.UTF8, mediaType);
-                }
-
+                MediaTypeHeaderValue? contentType = null;
+                if (request.ContentType != null) { contentType = MediaTypeHeaderValue.Parse(request.ContentType); }
+                forwardRequest.Content = new StringContent(requestBody, contentType);
 
                 var responseMessage = await client.SendAsync(forwardRequest);
                 var responseBytes = await responseMessage.Content.ReadAsByteArrayAsync();
-                var dataType = DataInspector.DetecDataType(responseBytes);
+                string responseBody = Encoding.UTF8.GetString(responseBytes);
+                var responseDataType = DataInspector.DetecDataType(responseBytes);
 
-                logEntry.DataType = dataType;
-                logEntry.StatusCode = (int)responseMessage.StatusCode;
-                logEntry.ResponseBody = Encoding.UTF8.GetString(responseBytes);
+                if (Recorder != null && Recorder.InputClients.Any())
+                {
+                    var stage = Recorder.InputClients.Last().Stage;
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        Recorder.OutputClients.Add(new OutputClient
+                        {
+                            Stage = stage,
+                            Method = request.HttpMethod,
+                            DataTypeMiddleWare = responseDataType,
+                            ByteSize = requestBytes.Length,
+                            StatusCode = (int)context.Response.StatusCode,
+                            DataResponse = responseBody,
+                        });
+                    });
+                }
 
                 var response = context.Response;
                 response.StatusCode = (int)responseMessage.StatusCode;
@@ -198,11 +234,10 @@ namespace UITestKit.MiddlewareHandling
             }
             catch (Exception ex)
             {
-                logEntry.ResponseBody = $"[HTTP Proxy ERR] {ex.Message}";
-                logEntry.StatusCode = -1;
+                //logEntry.ResponseBody = $"[HTTP Proxy ERR] {ex.Message}";
+                //logEntry.StatusCode = -1;
             }
 
-            AddRequestLog(logEntry);
         }
 
         #endregion
@@ -217,13 +252,6 @@ namespace UITestKit.MiddlewareHandling
                 _tcpListener.Start();
 
                 Task.Run(() => ListenForTcpConnections(token), token);
-                AppendToFile(new LoggedRequest
-                {
-                    Method = "SYSTEM",
-                    Url = "TCP Proxy",
-                    RequestBody = $"TCP proxy started on port {PROXY_PORT}",
-                    StatusCode = 1
-                });
             }
             catch (Exception ex)
             {
@@ -262,8 +290,8 @@ namespace UITestKit.MiddlewareHandling
                     using var clientStream = client.GetStream();
                     using var serverStream = server.GetStream();
 
-                    var c2s = RelayDataAsync(clientStream, serverStream, "Client -> Server", token);
-                    var s2c = RelayDataAsync(serverStream, clientStream, "Server -> Client", token);
+                    var c2s = RelayDataAsync(clientStream, serverStream, "Client", token);
+                    var s2c = RelayDataAsync(serverStream, clientStream, "Server", token);
 
                     await Task.WhenAny(c2s, s2c);
                 }
@@ -284,23 +312,67 @@ namespace UITestKit.MiddlewareHandling
         private async Task RelayDataAsync(NetworkStream from, NetworkStream to, string direction, CancellationToken token)
         {
             var buffer = new byte[8192];
-            int read;
+            int read = 0;
             while ((read = await from.ReadAsync(buffer, 0, buffer.Length, token)) > 0)
             {
                 await to.WriteAsync(buffer, 0, read, token);
-                var dataType = DataInspector.DetecDataType(buffer.Take(read).ToArray());
-
                 var data = Encoding.UTF8.GetString(buffer, 0, read);
-                var entry = new LoggedRequest
-                {
-                    Method = direction,
-                    Url = data.Length > 100 ? data[..100] + "..." : data,
-                    DataType = dataType,
-                    RequestBody = data,
-                    StatusCode = read
-                };
+                var dataType = DataInspector.DetecDataType(buffer.Take(read).ToArray());
+                var byteSize = read;
 
-                AddRequestLog(entry);
+                // Write OutputServers/OutputClient
+                if (Recorder != null && Recorder.InputClients.Any())
+                {
+                    var stage = Recorder.InputClients.Last().Stage;
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        if (direction.Contains("Client"))
+                        {
+                            var existingOutputServer = Recorder.OutputServers.LastOrDefault(s => s.Stage == stage);
+                            if (existingOutputServer != null)
+                            {
+                                existingOutputServer.Method = "TCP";
+                                existingOutputServer.DataRequest += data;
+                                existingOutputServer.ByteSize += byteSize;
+                                existingOutputServer.DataTypeMiddleware = dataType;
+                            }
+                            else
+                            {
+                                Recorder.OutputServers.Add(new OutputServer
+                                {
+                                    Stage = stage,
+                                    Method = "TCP",
+                                    DataRequest = data,
+                                    DataTypeMiddleware = dataType,
+                                    ByteSize = byteSize
+                                });
+                            }
+                        }
+                        else
+                        {
+                            var existingOutputClient = Recorder.OutputClients.LastOrDefault(c => c.Stage == stage);
+                            if (existingOutputClient != null)
+                            {
+                                existingOutputClient.Method = "TCP";
+                                existingOutputClient.DataResponse += data;
+                                existingOutputClient.ByteSize += byteSize;
+                                existingOutputClient.DataTypeMiddleWare = dataType;
+                            
+                            }
+                            else
+                            {
+                                Recorder.OutputClients.Add(new OutputClient
+                                {
+                                    Stage = stage,
+                                    Method = "TCP",
+                                    DataResponse = data,
+                                    DataTypeMiddleWare = dataType,
+                                    ByteSize = byteSize
+                                });
+                            }
+                        }
+                    });
+                }
             }
         }
 
@@ -313,7 +385,6 @@ namespace UITestKit.MiddlewareHandling
             AppendToFile(log);
             Application.Current.Dispatcher.Invoke(() =>
             {
-                LoggedRequests.Add(log);
             });
         }
 

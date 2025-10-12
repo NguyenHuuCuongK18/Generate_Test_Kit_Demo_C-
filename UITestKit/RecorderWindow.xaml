@@ -4,19 +4,46 @@
         Title="Recorder" Height="450" Width="800">
     <DockPanel>
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="5">
-            <TextBox x:Name="txtClientInput" Width="400" Margin="0,0,5,0"/>
-            <Button Content="Send Input" Width="100" Click="BtnSendInput_Click"/>
             <Button Content="Close All" Width="100" Margin="5,0,0,0" Click="BtnCloseAll_Click"/>
             <Button Content="Submit" Width="100" Margin="5,0,0,0" Click="BtnSubmit_Click"/>
         </StackPanel>
 
-        <DataGrid x:Name="dgSteps" ItemsSource="{Binding Steps}" AutoGenerateColumns="False" Margin="5">
-            <DataGrid.Columns>
-                <DataGridTextColumn Header="Step" Binding="{Binding StepNumber}" Width="50"/>
-                <DataGridTextColumn Header="Client Input" Binding="{Binding ClientInput}" Width="200"/>
-                <DataGridTextColumn Header="Client Output" Binding="{Binding ClientOutput}" Width="200"/>
-                <DataGridTextColumn Header="Server Output" Binding="{Binding ServerOutput}" Width="200"/>
-            </DataGrid.Columns>
-        </DataGrid>
+        <TabControl Margin="5">
+            <TabItem Header="Input Client">
+                <DataGrid ItemsSource="{Binding InputClients}" AutoGenerateColumns="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Stage" Binding="{Binding Stage}" Width="50"/>
+                        <DataGridTextColumn Header="Action" Binding="{Binding Action}" Width="100"/>
+                        <DataGridTextColumn Header="Input" Binding="{Binding Input}" Width="150"/>
+                        <DataGridTextColumn Header="DataType" Binding="{Binding DataType}" Width="100"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+            <TabItem Header="Output Client">
+                <DataGrid ItemsSource="{Binding OutputClients}" AutoGenerateColumns="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Stage" Binding="{Binding Stage}" Width="50"/>
+                        <DataGridTextColumn Header="Method" Binding="{Binding Method}" Width="100"/>
+                        <DataGridTextColumn Header="StatusCode" Binding="{Binding StatusCode}" Width="100"/>
+                        <DataGridTextColumn Header="DataResponse" Binding="{Binding DataResponse}" Width="100"/>
+                        <DataGridTextColumn Header="Output" Binding="{Binding Output}" Width="150"/>
+                        <DataGridTextColumn Header="DataTypeMiddleWare" Binding="{Binding DataTypeMiddleWare}" Width="100"/>
+                        <DataGridTextColumn Header="ByteSize" Binding="{Binding ByteSize}" Width="100"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+            <TabItem Header="Output Server">
+                <DataGrid ItemsSource="{Binding OutputServers}" AutoGenerateColumns="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Stage" Binding="{Binding Stage}" Width="50"/>
+                        <DataGridTextColumn Header="Method" Binding="{Binding Method}" Width="100"/>
+                        <DataGridTextColumn Header="DataRequest" Binding="{Binding DataRequest}" Width="100"/>
+                        <DataGridTextColumn Header="Output" Binding="{Binding Output}" Width="150"/>
+                        <DataGridTextColumn Header="DataTypeMiddleware" Binding="{Binding DataTypeMiddleware}" Width="100"/>
+                        <DataGridTextColumn Header="ByteSize" Binding="{Binding ByteSize}" Width="100"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+        </TabControl>
     </DockPanel>
 </Window>

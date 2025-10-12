@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Forms;
 using UITestKit.MiddlewareHandling;
 using UITestKit.Model;
+using UITestKit.Service;
 using UITestKit.ServiceExcute;
 using UITestKit.Views;
 using Application = System.Windows.Application;
@@ -19,47 +20,90 @@ namespace UITestKit
         private int _stepCounter = 0;
         private string path = string.Empty;
         private readonly MiddlewareStart _middlewareStart = MiddlewareStart.Instance;
+        private HashSet<string> _ignoreTexts = new HashSet<string>();
 
-        public BindingList<TestStep> Steps { get; } = new BindingList<TestStep>();
         public BindingList<Input_Client> InputClients { get; } = new BindingList<Input_Client>();
         public BindingList<OutputClient> OutputClients { get; } = new BindingList<OutputClient>();
         public BindingList<OutputServer> OutputServers { get; } = new BindingList<OutputServer>();
 
-
-
-        public RecorderWindow(ExecutableManager manager,string path)
+        public RecorderWindow(ExecutableManager manager, string path)
         {
             InitializeComponent();
             DataContext = this;
             _manager = manager;
-
+            AddActionStage("Connect");
+            InitializeIgnoreList();
             // Subscribe sự kiện TRƯỚC khi start process để không bị miss output ban đầu
             _manager.ClientOutputReceived += data => Dispatcher.Invoke(() => HandleProcessOutput(isClient: true, data));
             _manager.ServerOutputReceived += data => Dispatcher.Invoke(() => HandleProcessOutput(isClient: false, data));
+
+            _middlewareStart.Recorder = this;
+
+            // launch console windows
+            var clientConsole = new ClientConsoleWindow();
+            clientConsole.Recorder = this;
+            clientConsole.Show();
+
+            var serverConsole = new ServerConsoleWindow();
+            serverConsole.Recorder = this;
+            serverConsole.Show();
         }
 
-        private void BtnSendInput_Click(object sender, RoutedEventArgs e)
+        #region load Ignore and check should be ignore
+        private void InitializeIgnoreList()
         {
-            string input = txtClientInput.Text.Trim();
-            if (!string.IsNullOrEmpty(input))
+            try
             {
-                // tạo step mới khi user gửi input
-                AddStep(clientInput: input);
-                _manager.SendClientInput(input);
-                txtClientInput.Clear();
+                var file = Path.Combine("D:\\CSharp_Project\\TestKitGenerator", "Ignore.xlsx");
+                _ignoreTexts = IgnoreListLoader.IgnoreLoader(file);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Không thể load file ignore: {ex.Message}");
+                _ignoreTexts = new HashSet<string>();
             }
         }
+
+        private bool ShouldIgnore(string line)
+        {
+            if (_ignoreTexts == null || _ignoreTexts.Count == 0)
+                return false;
+
+            foreach (var ignore in _ignoreTexts)
+            {
+                if (line.Contains(ignore, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+        #endregion
+
+        #region create action without Input from client
+        // create action without Input from client
+        public void AddActionStage(string action, string input = "", string dataType = "")
+        {
+            _stepCounter++;
+            InputClients.Add(new Input_Client
+            {
+                Stage = _stepCounter,
+                Input = input,
+                DataType = dataType,
+                Action = action
+            });
+
+        }
+        #endregion
 
         private async void BtnSubmit_Click(object sender, RoutedEventArgs e)
         {
             var exporter = new ExcelExporter();
-            //exporter.ExportToExcel("TestCases.xlsx", Steps.ToList());
             string pathExport = Path.Combine(path, "TestResult.xlsx");
             exporter.ExportToExcelParams(pathExport,
-                ("TestSteps",Steps.Cast<object>().ToList()),
-                ("MiddleWare", _middlewareStart.LoggedRequests.Cast<object>().ToList())
+                    ("Input_Client", InputClients.Cast<object>().ToList()),
+                    ("Output_Client", OutputClients.Cast<object>().ToList()),
+                    ("Output_Server", OutputServers.Cast<object>().ToList())
                 );
-            await _manager.StopAllAsync();
+            //BtnCloseAll_Click(sender, e);
             MessageBox.Show("Exported to TestCases.xlsx");
         }
 
@@ -67,12 +111,12 @@ namespace UITestKit
         {
             try
             {
-                 await _manager.StopAllAsync();
-                _middlewareStart.Stop();
+                await _manager.StopAllAsync();
+                _middlewareStart.StopAsync();
                 // Lặp qua tất cả các cửa sổ đang mở
                 foreach (Window window in Application.Current.Windows)
                 {
-                    if (window is MiddlewareView || window is RecorderWindow)
+                    if (window is not MainWindow)
                     {
                         window.Close();
                     }
@@ -87,53 +131,54 @@ namespace UITestKit
             }
         }
 
-
-
-        private void AddStep(string? clientInput = null, string? clientOutput = null, string? serverOutput = null)
-        {
-            _stepCounter++;
-            Steps.Add(new TestStep
-            {
-                StepNumber = _stepCounter,
-                ClientInput = clientInput ?? "",
-                ClientOutput = clientOutput ?? "",
-                ServerOutput = serverOutput ?? ""
-            });
-        }
-
         /// <summary>
         /// Tìm step phù hợp để cập nhật output. Nếu không tìm thấy -> tạo step mới.
         /// </summary>
+        ///
+        #region HandleProcessOutput
         private void HandleProcessOutput(bool isClient, string data)
         {
-            // Luôn lấy step cuối cùng để append (không tạo mới khi output xuất hiện)
-            TestStep stepToUpdate = Steps.LastOrDefault();
+            if (InputClients.Count == 0) return;
+            if (ShouldIgnore(data)) return;
+            var currentStage = InputClients.Last().Stage;
 
-            if (stepToUpdate == null)
+            if (isClient)
             {
-                // Nếu chưa có step nào (ví dụ process in ra trước khi client nhập gì)
-                AddStep(
-                    clientInput: null,
-                    clientOutput: isClient ? data : null,
-                    serverOutput: !isClient ? data : null
-                );
+                var outputClientProcess = OutputClients.LastOrDefault(client => client.Stage == currentStage);
+                if (outputClientProcess != null)
+                {
+                    outputClientProcess.Output += data + "\n";
+                }
+                else
+                {
+                    outputClientProcess = new OutputClient
+                    {
+                        Stage = currentStage,
+                        Output = data + "\n"
+                    };
+                    OutputClients.Add(outputClientProcess);
+                }
             }
             else
             {
-                if (isClient)
-                    stepToUpdate.ClientOutput = AppendWithNewLine(stepToUpdate.ClientOutput, data);
+                var outServerProcess = OutputServers.LastOrDefault(server => server.Stage == currentStage);
+                if (outServerProcess != null)
+                {
+                    outServerProcess.Output += data + "\n";
+
+                }
                 else
-                    stepToUpdate.ServerOutput = AppendWithNewLine(stepToUpdate.ServerOutput, data);
-
-                var index = Steps.IndexOf(stepToUpdate);
-                if (index >= 0) Steps.ResetItem(index); // refresh UI
+                {
+                    outServerProcess = new OutputServer
+                    {
+                        Stage = currentStage,
+                        Output = data + "\n"
+                    };
+                    OutputServers.Add(outServerProcess);
+                }
             }
-        }
 
-        private string AppendWithNewLine(string existing, string addition)
-        {
-            if (string.IsNullOrWhiteSpace(existing)) return addition;
-            return existing + System.Environment.NewLine + addition;
         }
+        #endregion
     }
 }

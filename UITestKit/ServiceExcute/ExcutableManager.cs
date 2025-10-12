@@ -14,8 +14,6 @@ namespace UITestKit.ServiceExcute
         private static readonly Lazy<ExecutableManager> _instance =
             new(() => new ExecutableManager());
         public static ExecutableManager Instance => _instance.Value;
-        private HashSet<string> _ignoreTexts = new HashSet<string>();
-
         private Process? _clientProcess;
         private Process? _serverProcess;
 
@@ -30,32 +28,32 @@ namespace UITestKit.ServiceExcute
             Directory.CreateDirectory(_debugFolder);
         }
         //load list ignore
-        public void InitializeIgnoreList(string excelPath)
-        {
-            try
-            {
-                var file = Path.Combine("D:\\CSharp_Project\\TestKitGenerator", "Ignore.xlsx");
-                _ignoreTexts = IgnoreListLoader.IgnoreLoader(file);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Không thể load file ignore: {ex.Message}");
-                _ignoreTexts = new HashSet<string>();
-            }
-        }
+        //public void InitializeIgnoreList(string excelPath)
+        //{
+        //    try
+        //    {
+        //        var file = Path.Combine("D:\\CSharp_Project\\TestKitGenerator", "Ignore.xlsx");
+        //        _ignoreTexts = IgnoreListLoader.IgnoreLoader(file);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        MessageBox.Show($"Không thể load file ignore: {ex.Message}");
+        //        _ignoreTexts = new HashSet<string>();
+        //    }
+        //}
         // method check isIgnore
-        private bool ShouldIgnore(string line)
-        {
-            if (_ignoreTexts == null || _ignoreTexts.Count == 0)
-                return false;
+        //private bool ShouldIgnore(string line)
+        //{
+        //    if (_ignoreTexts == null || _ignoreTexts.Count == 0)
+        //        return false;
 
-            foreach (var ignore in _ignoreTexts)
-            {
-                if (line.Contains(ignore, StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-            return false;
-        }
+        //    foreach (var ignore in _ignoreTexts)
+        //    {
+        //        if (line.Contains(ignore, StringComparison.OrdinalIgnoreCase))
+        //            return true;
+        //    }
+        //    return false;
+        //}
 
 
         /// <summary>
@@ -139,58 +137,155 @@ namespace UITestKit.ServiceExcute
         {
             process.Start();
 
-            // Đọc output liên tục (kể cả Console.Write)
+            // ===== OUTPUT (stdout) =====
             Task.Run(async () =>
             {
                 var reader = process.StandardOutput;
-                char[] buffer = new char[256];
+                char[] buffer = new char[1024];
                 int read;
-                string leftover = string.Empty;
+
+                var sb = new StringBuilder();      // lưu partial line giữa các chunk
+                object sbLock = new object();
+                CancellationTokenSource pendingFlushCts = null;
+
+                const int DEBOUNCE_MS = 100; // thời gian chờ trước khi flush phần partial (tùy chỉnh)
+
+                void ScheduleFlushPartial()
+                {
+                    // Cancel + dispose cts trước đó (nếu có)
+                    var prev = Interlocked.Exchange(ref pendingFlushCts, new CancellationTokenSource());
+                    if (prev != null)
+                    {
+                        try { prev.Cancel(); prev.Dispose(); }
+                        catch { }
+                    }
+
+                    var cts = pendingFlushCts;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await Task.Delay(DEBOUNCE_MS, cts.Token);
+                        }
+                        catch (TaskCanceledException) { return; }
+
+                        string partial;
+                        lock (sbLock)
+                        {
+                            if (sb.Length == 0) return;
+                            partial = sb.ToString();
+                            sb.Clear();
+                        }
+
+                        // flush partial (đã có pause -> coi như hoàn chỉnh)
+                        onOutput(partial);
+                        AppendDebugFile(logFile, partial);
+                    });
+                }
 
                 while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
                 {
-                    string chunk = leftover + new string(buffer, 0, read);
-                    var lines = chunk.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+                    for (int i = 0; i < read; i++)
+                    {
+                        char c = buffer[i];
 
-                    // Nếu chunk KHÔNG kết thúc bằng newline, thì dòng cuối bị cắt dở -> lưu lại
-                    if (!chunk.EndsWith("\n") && !chunk.EndsWith("\r"))
-                    {
-                        leftover = lines[^1];
-                        lines = lines.Take(lines.Length - 1).ToArray();
-                    }
-                    else
-                    {
-                        leftover = string.Empty;
+                        // coi cả '\r' và '\n' là terminator
+                        if (c == '\r' || c == '\n')
+                        {
+                            string line;
+                            lock (sbLock)
+                            {
+                                line = sb.ToString();
+                                sb.Clear();
+                            }
+
+                            if (!string.IsNullOrEmpty(line))
+                            {
+                                onOutput(line);
+                                AppendDebugFile(logFile, line);
+                            }
+
+                            // Nếu có timer flush partial đang chờ, huỷ nó (bởi ta vừa flush)
+                            var prev = Interlocked.Exchange(ref pendingFlushCts, null);
+                            if (prev != null)
+                            {
+                                try { prev.Cancel(); prev.Dispose(); }
+                                catch { }
+                            }
+                        }
+                        else
+                        {
+                            lock (sbLock) sb.Append(c);
+                        }
                     }
 
-                    foreach (var line in lines)
-                    {
-                        if (string.IsNullOrWhiteSpace(line)) continue;
-                        if (ShouldIgnore(line)) continue;
-                        onOutput(line);
-                    }
+                    // Nếu còn partial (không có newline trong chunk), schedule một flush sau debounce
+                    bool hasPartial;
+                    lock (sbLock) { hasPartial = sb.Length > 0; }
+                    if (hasPartial) ScheduleFlushPartial();
                 }
 
-                // Flush dòng cuối cùng nếu còn sót
-                if (!string.IsNullOrWhiteSpace(leftover))
-                    onOutput(leftover);
+                // Khi stream kết thúc: huỷ timer và flush phần còn lại ngay
+                var finalCts = Interlocked.Exchange(ref pendingFlushCts, null);
+                if (finalCts != null) { try { finalCts.Cancel(); finalCts.Dispose(); } catch { } }
+
+                string last;
+                lock (sbLock)
+                {
+                    last = sb.Length > 0 ? sb.ToString() : null;
+                    sb.Clear();
+                }
+                if (!string.IsNullOrEmpty(last))
+                {
+                    onOutput(last);
+                    AppendDebugFile(logFile, last);
+                }
             });
 
-
-            // Đọc error stream
+            // ===== ERROR (stderr) =====
             Task.Run(async () =>
             {
                 var errReader = process.StandardError;
-                char[] buffer = new char[256];
-                int read;
-                while ((read = await errReader.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                char[] errBuf = new char[1024];
+                int errRead;
+                var errSb = new StringBuilder();
+
+                while ((errRead = await errReader.ReadAsync(errBuf, 0, errBuf.Length)) > 0)
                 {
-                    string chunk = new(buffer, 0, read);
-                    if (!string.IsNullOrEmpty(chunk))
+                    for (int i = 0; i < errRead; i++)
                     {
-                        onOutput("[ERR] " + chunk);
-                        AppendDebugFile(logFile, "[ERR] " + chunk);
+                        char c = errBuf[i];
+                        if (c == '\r' || c == '\n')
+                        {
+                            if (errSb.Length > 0)
+                            {
+                                var chunk = errSb.ToString();
+                                errSb.Clear();
+                                onOutput("[ERR] " + chunk);
+                                AppendDebugFile(logFile, "[ERR] " + chunk);
+                            }
+                        }
+                        else
+                        {
+                            errSb.Append(c);
+                        }
                     }
+
+                    // error thường ngắn — flush partial ngay
+                    if (errSb.Length > 0)
+                    {
+                        var partial = errSb.ToString();
+                        errSb.Clear();
+                        onOutput("[ERR] " + partial);
+                        AppendDebugFile(logFile, "[ERR] " + partial);
+                    }
+                }
+
+                if (errSb.Length > 0)
+                {
+                    var leftover = errSb.ToString();
+                    onOutput("[ERR] " + leftover);
+                    AppendDebugFile(logFile, "[ERR] " + leftover);
                 }
             });
         }
@@ -248,7 +343,7 @@ namespace UITestKit.ServiceExcute
             }
             catch { }
         }
-
+        #region StopAllAsync
         public async Task StopAllAsync()
         {
             ProgressDialog? dialog = null;
@@ -289,8 +384,83 @@ namespace UITestKit.ServiceExcute
                 });
             }
         }
+        #endregion
 
+        #region StopClientAsync
+        public async Task StopClientAsync()
+        {
+            ProgressDialog? dialog = null;
+            try
+            {
+                // Hiển thị loading dialog không chặn
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    dialog = new ProgressDialog("Đang dừng tiến trình client...");
+                    dialog.Owner = Application.Current.MainWindow;
+                    dialog.Show(); // Không dùng ShowDialog -> không chặn luồng
+                });
 
+                await StopProcessAsync(_clientProcess, "Client");
+
+                _clientProcess = null;
+
+                // Đóng dialog sau khi dừng xong
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    dialog?.Close();
+                    MessageBox.Show("Tiến trình client đã được dừng thành công.",
+                        "Thông báo", MessageBoxButton.OK, MessageBoxImage.Information);
+                });
+            }
+            catch (Exception ex)
+            {
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    dialog?.Close();
+                    MessageBox.Show($"[StopClientAsync ERR] {ex.Message}",
+                        "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
+                });
+            }
+        }
+        #endregion
+
+        #region StopServerAsync
+        public async Task StopServerAsync()
+        {
+            ProgressDialog? dialog = null;
+            try
+            {
+                // Hiển thị loading dialog không chặn
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    dialog = new ProgressDialog("Đang dừng tiến trình server...");
+                    dialog.Owner = Application.Current.MainWindow;
+                    dialog.Show(); // Không dùng ShowDialog -> không chặn luồng
+                });
+
+                await StopProcessAsync(_serverProcess, "Server");
+
+                _serverProcess = null;
+
+                // Đóng dialog sau khi dừng xong
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    dialog?.Close();
+                    MessageBox.Show("Tiến trình server đã được dừng thành công.",
+                        "Thông báo", MessageBoxButton.OK, MessageBoxImage.Information);
+                });
+            }
+            catch (Exception ex)
+            {
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    dialog?.Close();
+                    MessageBox.Show($"[StopServerAsync ERR] {ex.Message}",
+                        "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
+                });
+            }
+        }
+        #endregion
 
         private async Task StopProcessAsync(Process? process, string role)
         {
@@ -300,21 +470,18 @@ namespace UITestKit.ServiceExcute
             {
                 if (!process.HasExited)
                 {
-                    bool hasWindow = process.MainWindowHandle != IntPtr.Zero;
 
-                    if (hasWindow)
-                    {
-                        process.CloseMainWindow();
-                        if (await WaitForExitAsync(process, 2000))
-                        {
-                            AppendDebugFile($"{role.ToLower()}.log", $"[{role}] closed normally.");
-                            return;
-                        }
-                    }
-
+                    // Nếu vẫn chưa thoát thì kill cứng
                     process.Kill(true);
-                    await WaitForExitAsync(process, 3000);
-                    AppendDebugFile($"{role.ToLower()}.log", $"[{role}] killed by manager.");
+
+                    if (!await WaitForExitSafeAsync(process, 1000))
+                    {
+                        AppendDebugFile($"{role.ToLower()}.log", $"[{role}] failed to exit after kill.");
+                    }
+                    else
+                    {
+                        AppendDebugFile($"{role.ToLower()}.log", $"[{role}] killed by manager.");
+                    }
                 }
             }
             catch (Exception ex)
@@ -323,13 +490,25 @@ namespace UITestKit.ServiceExcute
             }
             finally
             {
-                process.Dispose();
+                try { process.Dispose(); } catch { }
             }
         }
 
-        private static Task<bool> WaitForExitAsync(Process process, int milliseconds)
+        private static async Task<bool> WaitForExitSafeAsync(Process process, int timeoutMs)
         {
-            return Task.Run(() => process.WaitForExit(milliseconds));
+            try
+            {
+                var tcs = new TaskCompletionSource<object?>();
+                process.Exited += (_, _) => tcs.TrySetResult(null);
+                process.EnableRaisingEvents = true;
+
+                var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
+                return completed == tcs.Task || process.HasExited;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
 

@@ -113,7 +113,6 @@ namespace UITestKit
 
                 // Start exe
                 _manager.Init(clientPath, serverPath);
-                _manager.InitializeIgnoreList("");
 
                 var recorder = new RecorderWindow(_manager,saveLocation);
                 recorder.Show();
@@ -128,8 +127,7 @@ namespace UITestKit
                     await _middlewareStart.StartAsync(useHttp: false);
                 }
                 _manager.StartClient();
-                var middlewareView = new MiddlewareView(_middlewareStart);
-                middlewareView.Show();
+                
 
                 System.Windows.MessageBox.Show($"Configuration saved to:\n{_configFilePath}", "Success",
                     MessageBoxButton.OK, MessageBoxImage.Information);

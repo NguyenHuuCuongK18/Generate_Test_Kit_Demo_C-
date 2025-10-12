@@ -17,7 +17,7 @@ namespace UITestKit
         {
             // Gọi StopBoth() khi đóng app
             await ExecutableManager.Instance.StopAllAsync();
-            MiddlewareStart.Instance.Stop();
+            await MiddlewareStart.Instance.StopAsync();
             base.OnExit(e);
         }
     }

@@ -88,7 +88,6 @@ public class ExcelExporter
                 using (var headerRange = worksheet.Cells[1, 1, 1, properties.Length])
                 {
                     headerRange.Style.Font.Bold = true;
-                    headerRange.Style.Fill.PatternType = ExcelFillStyle.Solid;
                     headerRange.Style.HorizontalAlignment = ExcelHorizontalAlignment.Center;
                 }
 
