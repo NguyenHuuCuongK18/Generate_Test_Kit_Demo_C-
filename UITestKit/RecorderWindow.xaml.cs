@@ -54,7 +54,10 @@ namespace UITestKit
         {
             try
             {
-                var file = Path.Combine("D:\\CSharp_Project\\TestKitGenerator", "Ignore.xlsx");
+                string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                string projectRootPath = Path.GetFullPath(Path.Combine(baseDirectory, @"..\..\..\.."));
+                string fileName = "Ignore.xlsx";
+                var file = Path.Combine(projectRootPath, fileName);
                 _ignoreTexts = IgnoreListLoader.IgnoreLoader(file);
             }
             catch (Exception ex)
@@ -97,7 +100,9 @@ namespace UITestKit
         private async void BtnSubmit_Click(object sender, RoutedEventArgs e)
         {
             var exporter = new ExcelExporter();
-            string pathExport = Path.Combine(path, "TestResult.xlsx");
+            string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            string projectRootPath = Path.GetFullPath(Path.Combine(baseDirectory, @"..\..\..\.."));
+            string pathExport = Path.Combine(projectRootPath, "TestResult.xlsx");
             exporter.ExportToExcelParams(pathExport,
                     ("Input_Client", InputClients.Cast<object>().ToList()),
                     ("Output_Client", OutputClients.Cast<object>().ToList()),

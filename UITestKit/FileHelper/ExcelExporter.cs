@@ -94,7 +94,7 @@ public class ExcelExporter
                     headerRange.Style.Font.Bold = true;
                 }
 
-                // ===== DATA (PHẦN ĐÃ SỬA LỖI) =====
+                
                 // Thay thế LoadFromCollection bằng vòng lặp thủ công để đảm bảo hoạt động với ICollection<object>
                 if (data.Any())
                 {
@@ -119,11 +119,17 @@ public class ExcelExporter
                 {
                     var column = worksheet.Column(i);
                     var propertyName = properties[i - 1].Name;
-
-                    if (propertyName.Equals("DataResponse", StringComparison.OrdinalIgnoreCase))
+                    column.Style.WrapText = true;
+                    if ((propertyName.Equals("DataResponse", StringComparison.OrdinalIgnoreCase))
+                        || (propertyName.Equals("Output", StringComparison.OrdinalIgnoreCase)))
                     {
                         column.Style.WrapText = true;
                         column.Width = MAX_COLUMN_WIDTH;
+                    }else if((propertyName.Equals("DataTypeMiddleWare", StringComparison.OrdinalIgnoreCase))||
+                        (propertyName.Equals("DataRequest", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        column.Style.WrapText = true;
+                        column.Width = MIN_COLUMN_WIDTH * 2;
                     }
                     else
                     {
