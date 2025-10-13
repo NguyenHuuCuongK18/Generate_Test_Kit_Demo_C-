@@ -217,7 +217,7 @@ namespace UITestKit.MiddlewareHandling
                             Stage = stage,
                             Method = request.HttpMethod,
                             DataTypeMiddleWare = responseDataType,
-                            ByteSize = requestBytes.Length,
+                            ByteSize = responseBytes.Length,
                             StatusCode = (int)context.Response.StatusCode,
                             DataResponse = responseBody,
                         });
