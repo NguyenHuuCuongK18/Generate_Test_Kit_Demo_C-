@@ -103,16 +103,16 @@ namespace UITestKit
                     ("Output_Client", OutputClients.Cast<object>().ToList()),
                     ("Output_Server", OutputServers.Cast<object>().ToList())
                 );
-            //BtnCloseAll_Click(sender, e);
+            await CloseAllAsync();
             MessageBox.Show("Exported to TestCases.xlsx");
         }
 
-        private async void BtnCloseAll_Click(object sender, RoutedEventArgs e)
+        private async Task CloseAllAsync()
         {
             try
             {
                 await _manager.StopAllAsync();
-                _middlewareStart.StopAsync();
+                await _middlewareStart.StopAsync();
                 // Lặp qua tất cả các cửa sổ đang mở
                 foreach (Window window in Application.Current.Windows)
                 {
@@ -129,6 +129,11 @@ namespace UITestKit
                                 MessageBoxButton.OK,
                                 MessageBoxImage.Error);
             }
+        }
+
+        private async void BtnCloseAll_Click(object sender, RoutedEventArgs e)
+        {
+            await CloseAllAsync();
         }
 
         /// <summary>

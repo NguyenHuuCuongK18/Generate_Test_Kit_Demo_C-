@@ -97,7 +97,7 @@ namespace UITestKit.MiddlewareHandling
                     _tcpListener = null;
                 }
 
-                // Log (giữ nguyên, nhưng nếu log chậm, có thể làm async sau)
+                // Log 
                 AppendToFile(new LoggedRequest
                 {
                     Method = "SYSTEM",

@@ -466,52 +466,50 @@ namespace UITestKit.ServiceExcute
         {
             if (process == null) return;
 
+            int processId;
             try
             {
-                if (!process.HasExited)
-                {
-
-                    // Nếu vẫn chưa thoát thì kill cứng
-                    process.Kill(true);
-
-                    if (!await WaitForExitSafeAsync(process, 1000))
-                    {
-                        AppendDebugFile($"{role.ToLower()}.log", $"[{role}] failed to exit after kill.");
-                    }
-                    else
-                    {
-                        AppendDebugFile($"{role.ToLower()}.log", $"[{role}] killed by manager.");
-                    }
-                }
+                if (process.HasExited) return;
+                processId = process.Id;
             }
-            catch (Exception ex)
+            catch (InvalidOperationException)
             {
-                AppendDebugFile($"{role.ToLower()}.log", $"[StopProcess ERR] {ex}");
+                return;
             }
             finally
             {
                 try { process.Dispose(); } catch { }
             }
-        }
 
-        private static async Task<bool> WaitForExitSafeAsync(Process process, int timeoutMs)
-        {
-            try
+            // Chuyển sang một luồng nền để thực thi lệnh taskkill mà không làm treo UI.
+            await Task.Run(() =>
             {
-                var tcs = new TaskCompletionSource<object?>();
-                process.Exited += (_, _) => tcs.TrySetResult(null);
-                process.EnableRaisingEvents = true;
+                try
+                {
+                    // Tạo một process mới chỉ để chạy lệnh taskkill
+                    using (var taskKillProcess = new Process())
+                    {
+                        var startInfo = taskKillProcess.StartInfo;
+                        startInfo.FileName = "taskkill";
+                        // /F: Buộc dừng (Force)
+                        // /T: Dừng cả các process con (Tree)
+                        // /PID: Dừng theo Process ID
+                        startInfo.Arguments = $"/F /PID {processId} /T";
+                        startInfo.UseShellExecute = false;
+                        startInfo.CreateNoWindow = true; // Chạy ẩn, không hiện cửa sổ cmd
 
-                var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
-                return completed == tcs.Task || process.HasExited;
-            }
-            catch
-            {
-                return false;
-            }
+                        taskKillProcess.Start();
+                        taskKillProcess.WaitForExit(3000); 
+
+                        AppendDebugFile($"{role.ToLower()}.log", $"[{role}] Termination command sent to process ID {processId} via taskkill.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppendDebugFile($"{role.ToLower()}.log", $"[StopProcess ERR] Exception during taskkill: {ex}");
+                }
+            });
         }
-
-
         #endregion
     }
 }

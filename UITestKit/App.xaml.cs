@@ -12,13 +12,15 @@ namespace UITestKit
     /// </summary>
     public partial class App : Application
     {
-
-        protected override async void OnExit(ExitEventArgs e)
+        public App()
         {
-            // Gọi StopBoth() khi đóng app
-            await ExecutableManager.Instance.StopAllAsync();
-            await MiddlewareStart.Instance.StopAsync();
-            base.OnExit(e);
+            this.Exit += App_Exit;
+        }
+        private void App_Exit(object sender, ExitEventArgs e)
+        {
+            // Gọi phương thức StopAll đồng bộ để đảm bảo client và server
+            // được dừng hoàn toàn trước khi ứng dụng thoát.
+            ExecutableManager.Instance.StopAll();
         }
     }
 
