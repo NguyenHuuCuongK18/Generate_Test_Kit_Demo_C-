@@ -35,11 +35,8 @@ namespace UITestKit
 
         private async void BtnEndClient_Click(object sender, RoutedEventArgs e)
         {
-            var endButton = (Button)sender;
             try
             {
-                endButton.IsEnabled = false;
-                txtClientInput.IsEnabled = false;
                 Recorder?.AddActionStage("ClientClose");
                 await _manager.StopClientAsync();
             }
@@ -47,9 +44,6 @@ namespace UITestKit
             {
                 MessageBox.Show($"Lỗi khi dừng Client: {ex.Message}", "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
 
-                // Nếu có lỗi, bật lại các control để người dùng thử lại
-                endButton.IsEnabled = true;
-                txtClientInput.IsEnabled = true;
             }
         }
 

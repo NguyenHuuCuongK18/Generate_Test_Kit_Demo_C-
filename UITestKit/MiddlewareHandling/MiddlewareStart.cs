@@ -1,17 +1,12 @@
-﻿using OfficeOpenXml.ConditionalFormatting.Contracts;
-using System.Collections.ObjectModel;
-using System.IO;
+﻿using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows;
 using UITestKit.Model;
 using UITestKit.Service;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement.Window;
 
 namespace UITestKit.MiddlewareHandling
 {
@@ -167,31 +162,49 @@ namespace UITestKit.MiddlewareHandling
         private async Task ProcessHttpRequest(HttpListenerContext context)
         {
             var request = context.Request;
-            string requestBody;
+            string requestBody = string.Empty;
 
-            using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-            requestBody = reader.ReadToEnd();
+            if (request.ContentLength64 > 0)
+            {
+                using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
+                requestBody = await reader.ReadToEndAsync(); 
+            }
 
             // get and detect dataType
             var requestBytes = request.ContentEncoding.GetBytes(requestBody);
             var requestDataType = DataInspector.DetecDataType(requestBytes);
-            if (Recorder != null && Recorder.InputClients.Any())
+            if (Recorder != null && Recorder.StageKeys.Any())
             {
-                // intial OutputServer(bắt request gửi đến server)
-                var stage = Recorder.InputClients.Last().Stage;
+                // Lấy stage lớn nhất hiện tại từ TestStages
+                var stage = Recorder.TestStages.Keys.Max();
+                var stepStage = Recorder.TestStages[stage];
+
+                // Initial OutputServer (bắt request gửi đến server)
                 Application.Current.Dispatcher.Invoke(() =>
                 {
-                    Recorder.OutputServers.Add(new OutputServer
+                    var existingOutputServer = stepStage.OutputServers.LastOrDefault(s => s.Stage == stage);
+
+                    if (existingOutputServer != null)
                     {
-                        Stage = stage,
-                        Method = request.HttpMethod,
-                        DataTypeMiddleware = requestDataType,
-                        ByteSize = requestBytes.Length,
-                        DataRequest = requestBody,
-                    });
+                        existingOutputServer.Method = request.HttpMethod;
+                        existingOutputServer.DataTypeMiddleware = requestDataType;
+                        existingOutputServer.ByteSize = requestBytes.Length;
+                        existingOutputServer.DataRequest = requestBody;
+                    }
+                    else
+                    {
+                        stepStage.OutputServers.Add(new OutputServer
+                        {
+                            Stage = stage,
+                            Method = request.HttpMethod,
+                            DataTypeMiddleware = requestDataType,
+                            ByteSize = requestBytes.Length,
+                            DataRequest = requestBody,
+                        });
+                    }
+                        
                 });
             }
-
 
             try
             {
@@ -207,21 +220,36 @@ namespace UITestKit.MiddlewareHandling
                 string responseBody = Encoding.UTF8.GetString(responseBytes);
                 var responseDataType = DataInspector.DetecDataType(responseBytes);
 
-                if (Recorder != null && Recorder.InputClients.Any())
+                if (Recorder != null && Recorder.TestStages.Any())
                 {
-                    var stage = Recorder.InputClients.Last().Stage;
-                    Application.Current.Dispatcher.Invoke(() =>
+                    var stage = Recorder.TestStages.Keys.Max();
+                    var stepStage = Recorder.TestStages[stage];
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
                     {
-                        Recorder.OutputClients.Add(new OutputClient
+                        var exitstingOutputClient = stepStage.OutputClients.LastOrDefault(s => s.Stage == stage);
+
+                        if (exitstingOutputClient != null)
                         {
-                            Stage = stage,
-                            Method = request.HttpMethod,
-                            DataTypeMiddleWare = responseDataType,
-                            ByteSize = responseBytes.Length,
-                            StatusCode = (int)context.Response.StatusCode,
-                            DataResponse = responseBody,
-                        });
+                            exitstingOutputClient.Method = request.HttpMethod;
+                            exitstingOutputClient.DataTypeMiddleWare = responseDataType;
+                            exitstingOutputClient.ByteSize = responseBytes.Length;
+                            exitstingOutputClient.StatusCode = (int)responseMessage.StatusCode;
+                            exitstingOutputClient.DataResponse = responseBody;
+                        }
+                        else
+                        {
+                            stepStage.OutputClients.Add(new OutputClient
+                            {
+                                Stage = stage,
+                                Method = request.HttpMethod,
+                                DataTypeMiddleWare = responseDataType,
+                                ByteSize = responseBytes.Length,
+                                StatusCode = (int)responseMessage.StatusCode,
+                                DataResponse = responseBody
+                            });
+                        }
                     });
+                        
                 }
 
                 var response = context.Response;
@@ -321,14 +349,17 @@ namespace UITestKit.MiddlewareHandling
                 var byteSize = read;
 
                 // Write OutputServers/OutputClient
-                if (Recorder != null && Recorder.InputClients.Any())
+                if (Recorder != null && Recorder.TestStages.Any())
                 {
-                    var stage = Recorder.InputClients.Last().Stage;
+
+                    var stage = Recorder.TestStages.Keys.Max();
+                    var testStage = Recorder.TestStages[stage];
+
                     await Application.Current.Dispatcher.InvokeAsync(() =>
                     {
                         if (direction.Contains("Client"))
                         {
-                            var existingOutputServer = Recorder.OutputServers.LastOrDefault(s => s.Stage == stage);
+                            var existingOutputServer = testStage.OutputServers.LastOrDefault(s => s.Stage == stage);
                             if (existingOutputServer != null)
                             {
                                 existingOutputServer.Method = "TCP";
@@ -338,7 +369,7 @@ namespace UITestKit.MiddlewareHandling
                             }
                             else
                             {
-                                Recorder.OutputServers.Add(new OutputServer
+                                testStage.OutputServers.Add(new OutputServer
                                 {
                                     Stage = stage,
                                     Method = "TCP",
@@ -350,7 +381,7 @@ namespace UITestKit.MiddlewareHandling
                         }
                         else
                         {
-                            var existingOutputClient = Recorder.OutputClients.LastOrDefault(c => c.Stage == stage);
+                            var existingOutputClient = testStage.OutputClients.LastOrDefault(c => c.Stage == stage);
                             if (existingOutputClient != null)
                             {
                                 existingOutputClient.Method = "TCP";
@@ -361,7 +392,7 @@ namespace UITestKit.MiddlewareHandling
                             }
                             else
                             {
-                                Recorder.OutputClients.Add(new OutputClient
+                                testStage.OutputClients.Add(new OutputClient
                                 {
                                     Stage = stage,
                                     Method = "TCP",

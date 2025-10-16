@@ -1,35 +1,42 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO;
-using System.Security.RightsManagement;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using UITestKit.Model;
-using UITestKit.Service;
 
 namespace UITestKit.ServiceExcute
 {
     public class ExecutableManager
     {
-        private static readonly Lazy<ExecutableManager> _instance =
-            new(() => new ExecutableManager());
+        #region Singleton
+        private static readonly Lazy<ExecutableManager> _instance = new(() => new ExecutableManager());
         public static ExecutableManager Instance => _instance.Value;
+        #endregion
+
+        #region Fields
         private Process? _clientProcess;
         private Process? _serverProcess;
-        private string _clientPath;
-        private string _serverPath;
+        private string _clientPath = string.Empty;
+        private string _serverPath = string.Empty;
 
+        private readonly string _debugFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "process_logs");
+        #endregion
+
+        #region Events
         public event Action<string>? ClientOutputReceived;
         public event Action<string>? ServerOutputReceived;
+        #endregion
 
-        private readonly string _debugFolder =
-            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "process_logs");
-
-        public ExecutableManager()
+        #region Constructor
+        private ExecutableManager()
         {
             Directory.CreateDirectory(_debugFolder);
         }
+        #endregion
+
+        #region Initialization
         /// <summary>
         /// Khởi tạo sẵn thông tin process mà chưa chạy.
         /// </summary>
@@ -37,6 +44,7 @@ namespace UITestKit.ServiceExcute
         {
             _clientPath = clientPath;
             _serverPath = serverPath;
+
             if (_clientProcess == null)
             {
                 _clientProcess = CreateProcess(clientPath, msg =>
@@ -45,6 +53,7 @@ namespace UITestKit.ServiceExcute
                     AppendDebugFile("client.log", msg);
                 }, "Client");
             }
+
             if (_serverProcess == null)
             {
                 _serverProcess = CreateProcess(serverPath, msg =>
@@ -80,15 +89,16 @@ namespace UITestKit.ServiceExcute
 
             return process;
         }
+        #endregion
 
-        #region Start
-
+        #region Start Methods
         /// <summary>
         /// Chạy server trước để middleware có thể kết nối.
         /// </summary>
         public void StartServer()
         {
             Init(_clientPath, _serverPath);
+
             if (_serverProcess == null)
                 throw new InvalidOperationException("Server process not initialized.");
 
@@ -100,176 +110,165 @@ namespace UITestKit.ServiceExcute
         /// </summary>
         public void StartClient()
         {
-            Init(_clientPath, _serverPath);
+            Init(_clientPath, _clientPath);
+
             if (_clientProcess == null)
                 throw new InvalidOperationException("Client process not initialized.");
 
             StartProcessAndMonitor(_clientProcess, msg => ClientOutputReceived?.Invoke(msg), "client.log");
         }
-
         #endregion
 
-        #region StartProcessAndMonitor
+        #region Process Monitoring - OPTIMIZED with Console.Write() support
         private void StartProcessAndMonitor(Process process, Action<string> onOutput, string logFile)
         {
             process.Start();
 
-            // ===== OUTPUT (stdout) =====
             Task.Run(async () =>
             {
-                var reader = process.StandardOutput;
-                char[] buffer = new char[1024];
-                int read;
-
-                var sb = new StringBuilder();      // lưu partial line giữa các chunk
-                object sbLock = new object();
-                CancellationTokenSource pendingFlushCts = null;
-
-                const int DEBOUNCE_MS = 100; // thời gian chờ trước khi flush phần partial (tùy chỉnh)
-
-                void ScheduleFlushPartial()
+                try
                 {
-                    // Cancel + dispose cts trước đó (nếu có)
-                    var prev = Interlocked.Exchange(ref pendingFlushCts, new CancellationTokenSource());
-                    if (prev != null)
+                    var reader = process.StandardOutput;
+                    var buffer = new char[1024];
+                    var lineBuffer = new StringBuilder();
+                    CancellationTokenSource? flushCts = null;
+
+                    const int FLUSH_DELAY_MS = 100; // Delay để flush partial content
+
+                    void FlushPartialLine()
                     {
-                        try { prev.Cancel(); prev.Dispose(); }
-                        catch { }
+                        if (lineBuffer.Length == 0) return;
+
+                        var content = lineBuffer.ToString();
+                        lineBuffer.Clear();
+
+                        onOutput(content);
+                        AppendDebugFile(logFile, content);
                     }
 
-                    var cts = pendingFlushCts;
-                    _ = Task.Run(async () =>
+                    void ScheduleFlush()
                     {
-                        try
+                        var oldCts = Interlocked.Exchange(ref flushCts, new CancellationTokenSource());
+                        oldCts?.Cancel();
+                        oldCts?.Dispose();
+
+                        var currentCts = flushCts;
+                        _ = Task.Run(async () =>
                         {
-                            await Task.Delay(DEBOUNCE_MS, cts.Token);
-                        }
-                        catch (TaskCanceledException) { return; }
+                            try
+                            {
+                                await Task.Delay(FLUSH_DELAY_MS, currentCts.Token);
 
-                        string partial;
-                        lock (sbLock)
-                        {
-                            if (sb.Length == 0) return;
-                            partial = sb.ToString();
-                            sb.Clear();
-                        }
+                                lock (lineBuffer)
+                                {
+                                    FlushPartialLine();
+                                }
+                            }
+                            catch (TaskCanceledException) { }
+                        });
+                    }
 
-                        // flush partial (đã có pause -> coi như hoàn chỉnh)
-                        onOutput(partial);
-                        AppendDebugFile(logFile, partial);
-                    });
-                }
-
-                while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                {
-                    for (int i = 0; i < read; i++)
+                    int read;
+                    while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
                     {
-                        char c = buffer[i];
-
-                        // coi cả '\r' và '\n' là terminator
-                        if (c == '\r' || c == '\n')
+                        lock (lineBuffer)
                         {
-                            string line;
-                            lock (sbLock)
+                            for (int i = 0; i < read; i++)
                             {
-                                line = sb.ToString();
-                                sb.Clear();
+                                char c = buffer[i];
+
+                                if (c == '\n')
+                                {
+                                    FlushPartialLine();
+
+                                    var cts = Interlocked.Exchange(ref flushCts, null);
+                                    cts?.Cancel();
+                                    cts?.Dispose();
+                                }
+                                else if (c != '\r') // Ignore \r
+                                {
+                                    lineBuffer.Append(c);
+                                }
                             }
 
-                            if (!string.IsNullOrEmpty(line))
+                            if (lineBuffer.Length > 0)
                             {
-                                onOutput(line);
-                                AppendDebugFile(logFile, line);
+                                ScheduleFlush();
                             }
-
-                            // Nếu có timer flush partial đang chờ, huỷ nó (bởi ta vừa flush)
-                            var prev = Interlocked.Exchange(ref pendingFlushCts, null);
-                            if (prev != null)
-                            {
-                                try { prev.Cancel(); prev.Dispose(); }
-                                catch { }
-                            }
-                        }
-                        else
-                        {
-                            lock (sbLock) sb.Append(c);
                         }
                     }
 
-                    // Nếu còn partial (không có newline trong chunk), schedule một flush sau debounce
-                    bool hasPartial;
-                    lock (sbLock) { hasPartial = sb.Length > 0; }
-                    if (hasPartial) ScheduleFlushPartial();
-                }
+                    // Final flush when stream ends
+                    lock (lineBuffer)
+                    {
+                        var cts = Interlocked.Exchange(ref flushCts, null);
+                        cts?.Cancel();
+                        cts?.Dispose();
 
-                // Khi stream kết thúc: huỷ timer và flush phần còn lại ngay
-                var finalCts = Interlocked.Exchange(ref pendingFlushCts, null);
-                if (finalCts != null) { try { finalCts.Cancel(); finalCts.Dispose(); } catch { } }
-
-                string last;
-                lock (sbLock)
-                {
-                    last = sb.Length > 0 ? sb.ToString() : null;
-                    sb.Clear();
+                        FlushPartialLine();
+                    }
                 }
-                if (!string.IsNullOrEmpty(last))
+                catch (Exception ex)
                 {
-                    onOutput(last);
-                    AppendDebugFile(logFile, last);
+                    var errorMsg = $"[Output Error] {ex.Message}";
+                    onOutput(errorMsg);
+                    AppendDebugFile(logFile, errorMsg);
                 }
             });
 
-            // ===== ERROR (stderr) =====
+            // ===== ERROR (stderr) 
             Task.Run(async () =>
             {
-                var errReader = process.StandardError;
-                char[] errBuf = new char[1024];
-                int errRead;
-                var errSb = new StringBuilder();
-
-                while ((errRead = await errReader.ReadAsync(errBuf, 0, errBuf.Length)) > 0)
+                try
                 {
-                    for (int i = 0; i < errRead; i++)
+                    var reader = process.StandardError;
+                    var buffer = new char[1024];
+                    var errorBuffer = new StringBuilder();
+
+                    int read;
+                    while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
                     {
-                        char c = errBuf[i];
-                        if (c == '\r' || c == '\n')
+                        for (int i = 0; i < read; i++)
                         {
-                            if (errSb.Length > 0)
+                            char c = buffer[i];
+
+                            if (c == '\n')
                             {
-                                var chunk = errSb.ToString();
-                                errSb.Clear();
-                                onOutput("[ERR] " + chunk);
-                                AppendDebugFile(logFile, "[ERR] " + chunk);
+                                if (errorBuffer.Length > 0)
+                                {
+                                    var errMsg = $"[ERR] {errorBuffer}";
+                                    errorBuffer.Clear();
+
+                                    onOutput(errMsg);
+                                    AppendDebugFile(logFile, errMsg);
+                                }
+                            }
+                            else if (c != '\r')
+                            {
+                                errorBuffer.Append(c);
                             }
                         }
-                        else
-                        {
-                            errSb.Append(c);
-                        }
                     }
 
-                    // error thường ngắn — flush partial ngay
-                    if (errSb.Length > 0)
+                    // Final flush
+                    if (errorBuffer.Length > 0)
                     {
-                        var partial = errSb.ToString();
-                        errSb.Clear();
-                        onOutput("[ERR] " + partial);
-                        AppendDebugFile(logFile, "[ERR] " + partial);
+                        var errMsg = $"[ERR] {errorBuffer}";
+                        onOutput(errMsg);
+                        AppendDebugFile(logFile, errMsg);
                     }
                 }
-
-                if (errSb.Length > 0)
+                catch (Exception ex)
                 {
-                    var leftover = errSb.ToString();
-                    onOutput("[ERR] " + leftover);
-                    AppendDebugFile(logFile, "[ERR] " + leftover);
+                    var errorMsg = $"[Error Stream Error] {ex.Message}";
+                    onOutput(errorMsg);
+                    AppendDebugFile(logFile, errorMsg);
                 }
             });
         }
         #endregion
 
         #region Input/Output
-
         public void SendClientInput(string input)
         {
             if (_clientProcess != null && !_clientProcess.HasExited)
@@ -288,6 +287,8 @@ namespace UITestKit.ServiceExcute
             catch { }
         }
         #endregion
+
+        #region Stop Methods 
 
         #region StopAllAsync
         public async Task StopAllAsync()
@@ -447,6 +448,8 @@ namespace UITestKit.ServiceExcute
                 try { process.Dispose(); } catch { }
             }
         }
+        #endregion
+
         #endregion
     }
 }

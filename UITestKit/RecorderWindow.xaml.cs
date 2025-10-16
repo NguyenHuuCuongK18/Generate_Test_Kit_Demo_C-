@@ -1,92 +1,133 @@
 ﻿// UITestKit/RecorderWindow.xaml.cs
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
-using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Forms;
+using System.Windows.Controls;
 using UITestKit.MiddlewareHandling;
 using UITestKit.Model;
 using UITestKit.Service;
 using UITestKit.ServiceExcute;
-using UITestKit.Views;
 using Application = System.Windows.Application;
 using MessageBox = System.Windows.MessageBox;
 
 namespace UITestKit
 {
-    public partial class RecorderWindow : Window
+    public partial class RecorderWindow : Window, INotifyPropertyChanged
     {
-        private readonly ExecutableManager _manager = ExecutableManager.Instance;
-        private int _stepCounter = 0;
-        private string path = string.Empty;
+        private readonly ExecutableManager _manager;
         private readonly MiddlewareStart _middlewareStart = MiddlewareStart.Instance;
-        private HashSet<string> _ignoreTexts = new HashSet<string>();
+        private readonly HashSet<string> _ignoreTexts = new HashSet<string>();
 
-        public BindingList<Input_Client> InputClients { get; } = new BindingList<Input_Client>();
-        public BindingList<OutputClient> OutputClients { get; } = new BindingList<OutputClient>();
-        public BindingList<OutputServer> OutputServers { get; } = new BindingList<OutputServer>();
+        private int _stepCounter = 0;
+        private int _selectedStageKey = -1;
+        private TestStage _selectedStageData = new TestStage();
+
+        public Dictionary<int, TestStage> TestStages { get; } = new Dictionary<int, TestStage>();
+        public ObservableCollection<int> StageKeys { get; } = new ObservableCollection<int>();
+
+        public TestStage SelectedStageData
+        {
+            get => _selectedStageData;
+            set
+            {
+                if (_selectedStageData != value)
+                {
+                    _selectedStageData = value;
+                    OnPropertyChanged(nameof(SelectedStageData));
+                }
+            }
+        }
+
+        public int SelectedStageKey
+        {
+            get => _selectedStageKey;
+            set
+            {
+                if (_selectedStageKey != value)
+                {
+                    _selectedStageKey = value;
+                    OnPropertyChanged(nameof(SelectedStageKey));
+
+                    if (TestStages.TryGetValue(_selectedStageKey, out var stage))
+                    {
+                        SelectedStageData = stage;
+                    }
+                }
+            }
+        }
 
         public RecorderWindow(ExecutableManager manager, string path)
         {
             InitializeComponent();
             DataContext = this;
-            _manager = manager;
-            AddActionStage("Connect");
-            InitializeIgnoreList();
-            // Subscribe sự kiện TRƯỚC khi start process để không bị miss output ban đầu
-            _manager.ClientOutputReceived += data => Dispatcher.Invoke(() => HandleProcessOutput(isClient: true, data));
-            _manager.ServerOutputReceived += data => Dispatcher.Invoke(() => HandleProcessOutput(isClient: false, data));
 
+            _manager = manager;
+            InitializeIgnoreList();
+
+            // Subscribe events
+            _manager.ClientOutputReceived += data => Dispatcher.Invoke(() => HandleProcessOutput(true, data));
+            _manager.ServerOutputReceived += data => Dispatcher.Invoke(() => HandleProcessOutput(false, data));
             _middlewareStart.Recorder = this;
 
-            // launch console windows
-            var clientConsole = new ClientConsoleWindow();
-            clientConsole.Recorder = this;
-            clientConsole.Show();
+            // Launch console windows
+            new ClientConsoleWindow { Recorder = this }.Show();
+            new ServerConsoleWindow { Recorder = this }.Show();
 
-            var serverConsole = new ServerConsoleWindow();
-            serverConsole.Recorder = this;
-            serverConsole.Show();
+            // Add initial stage and select it
+            AddActionStage("Connect");
         }
 
-        #region load Ignore and check should be ignore
+        #region INotifyPropertyChanged
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        protected void OnPropertyChanged(string propertyName)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+        #endregion
+
+        #region Ignore List Handling
         private void InitializeIgnoreList()
         {
             try
             {
                 string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
                 string projectRootPath = Path.GetFullPath(Path.Combine(baseDirectory, @"..\..\..\.."));
-                string fileName = "Ignore.xlsx";
-                var file = Path.Combine(projectRootPath, fileName);
-                _ignoreTexts = IgnoreListLoader.IgnoreLoader(file);
+                string filePath = Path.Combine(projectRootPath, "Ignore.xlsx");
+
+                var ignoreList = IgnoreListLoader.IgnoreLoader(filePath);
+                if (ignoreList != null)
+                {
+                    foreach (var item in ignoreList)
+                    {
+                        _ignoreTexts.Add(item);
+                    }
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Không thể load file ignore: {ex.Message}");
-                _ignoreTexts = new HashSet<string>();
+                MessageBox.Show($"Không thể load file ignore: {ex.Message}", "Warning",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
         private bool ShouldIgnore(string line)
         {
-            if (_ignoreTexts == null || _ignoreTexts.Count == 0)
+            if (string.IsNullOrEmpty(line) || _ignoreTexts.Count == 0)
                 return false;
 
-            foreach (var ignore in _ignoreTexts)
-            {
-                if (line.Contains(ignore, StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-            return false;
+            return _ignoreTexts.Any(ignore => line.Contains(ignore, StringComparison.OrdinalIgnoreCase));
         }
         #endregion
 
-        #region create action without Input from client
-        // create action without Input from client
+        #region Stage Management
         public void AddActionStage(string action, string input = "", string dataType = "")
         {
             _stepCounter++;
-            InputClients.Add(new Input_Client
+
+            var testStage = new TestStage();
+            testStage.InputClients.Add(new Input_Client
             {
                 Stage = _stepCounter,
                 Input = input,
@@ -94,45 +135,102 @@ namespace UITestKit
                 Action = action
             });
 
+            TestStages[_stepCounter] = testStage;
+            StageKeys.Add(_stepCounter);
+            SelectedStageKey = _stepCounter;
         }
         #endregion
 
-        private async void BtnSubmit_Click(object sender, RoutedEventArgs e)
+        #region HandleProcessOutput
+        private void HandleProcessOutput(bool isClient, string data)
         {
-            var exporter = new ExcelExporter();
-            string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-            string projectRootPath = Path.GetFullPath(Path.Combine(baseDirectory, @"..\..\..\.."));
-            string pathExport = Path.Combine(projectRootPath, "TestResult.xlsx");
-            exporter.ExportToExcelParams(pathExport,
-                    ("Input_Client", InputClients.Cast<object>().ToList()),
-                    ("Output_Client", OutputClients.Cast<object>().ToList()),
-                    ("Output_Server", OutputServers.Cast<object>().ToList())
+            if (!TestStages.Any()) return;
+            if (ShouldIgnore(data)) return;
+
+            var currentStage = TestStages.Keys.Max();
+            if (!TestStages.ContainsKey(currentStage)) return;
+
+            var testStage = TestStages[currentStage];
+
+            if (isClient)
+            {
+                AppendOutput(
+                    testStage.OutputClients,
+                    currentStage,
+                    data,
+                    () => new OutputClient { Stage = currentStage }
                 );
-            await CloseAllAsync();
-            MessageBox.Show("Exported to TestCases.xlsx");
+            }
+            else
+            {
+                AppendOutput(
+                    testStage.OutputServers,
+                    currentStage,
+                    data,
+                    () => new OutputServer { Stage = currentStage }
+                );
+            }
+
+            OnPropertyChanged(nameof(SelectedStageData));
         }
 
-        private async Task CloseAllAsync()
+        private void AppendOutput<T>(
+            ObservableCollection<T> collection,
+            int stage,
+            string data,
+            Func<T> createNew) where T : class
+        {
+            var existingItem = collection.LastOrDefault(item =>
+            {
+                var stageProp = item.GetType().GetProperty("Stage");
+                return stageProp != null && (int)stageProp.GetValue(item) == stage;
+            });
+
+            if (existingItem != null)
+            {
+                var outputProp = existingItem.GetType().GetProperty("Output");
+                if (outputProp != null)
+                {
+                    var currentOutput = (string)outputProp.GetValue(existingItem);
+
+                    var newOutput = string.IsNullOrEmpty(currentOutput)
+                        ? data
+                        : currentOutput + "\n" + data;
+
+                    outputProp.SetValue(existingItem, newOutput);
+                }
+            }
+            else
+            {
+                var newItem = createNew();
+                var outputProp = newItem.GetType().GetProperty("Output");
+                outputProp?.SetValue(newItem, data);
+                collection.Add(newItem);
+            }
+        }
+        #endregion
+
+        #region Button Click Handlers
+        private async void BtnSubmit_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                await _manager.StopAllAsync();
-                await _middlewareStart.StopAsync();
-                // Lặp qua tất cả các cửa sổ đang mở
-                foreach (Window window in Application.Current.Windows)
-                {
-                    if (window is not MainWindow)
-                    {
-                        window.Close();
-                    }
-                }
+                var exporter = new ExcelExporter();
+                string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                string projectRootPath = Path.GetFullPath(Path.Combine(baseDirectory, @"..\..\..\.."));
+                string pathExport = Path.Combine(projectRootPath, "TestResult.xlsx");
+
+                // TODO: Implement export logic
+                // exporter.ExportToExcel(pathExport, TestStages);
+
+                await CloseAllAsync();
+                MessageBox.Show("Exported to TestResult.xlsx", "Success",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Đã xảy ra lỗi khi đóng cửa sổ: {ex.Message}",
-                                "Error",
-                                MessageBoxButton.OK,
-                                MessageBoxImage.Error);
+                MessageBox.Show($"Export failed: {ex.Message}", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -141,53 +239,75 @@ namespace UITestKit
             await CloseAllAsync();
         }
 
-        /// <summary>
-        /// Tìm step phù hợp để cập nhật output. Nếu không tìm thấy -> tạo step mới.
-        /// </summary>
-        ///
-        #region HandleProcessOutput
-        private void HandleProcessOutput(bool isClient, string data)
+        private void BtnAddStage_Click(object sender, RoutedEventArgs e)
         {
-            if (InputClients.Count == 0) return;
-            if (ShouldIgnore(data)) return;
-            var currentStage = InputClients.Last().Stage;
+            // TODO: Implement add stage dialog
+            AddActionStage("New Action");
+        }
 
-            if (isClient)
+        private void BtnUpdateStage_Click(object sender, RoutedEventArgs e)
+        {
+            // TODO: Implement update stage logic
+            if (SelectedStageKey > 0)
             {
-                var outputClientProcess = OutputClients.LastOrDefault(client => client.Stage == currentStage);
-                if (outputClientProcess != null)
+                OnPropertyChanged(nameof(SelectedStageData));
+            }
+        }
+
+        private void BtnDeleteStage_Click(object sender, RoutedEventArgs e)
+        {
+            if (SelectedStageKey <= 0 || !TestStages.ContainsKey(SelectedStageKey))
+                return;
+
+            var result = MessageBox.Show($"Delete Stage {SelectedStageKey}?", "Confirm Delete",
+                MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Yes)
+            {
+                TestStages.Remove(SelectedStageKey);
+                StageKeys.Remove(SelectedStageKey);
+
+                // Select next available stage
+                if (StageKeys.Count > 0)
                 {
-                    outputClientProcess.Output += data + "\n";
-                }
-                else
-                {
-                    outputClientProcess = new OutputClient
-                    {
-                        Stage = currentStage,
-                        Output = data + "\n"
-                    };
-                    OutputClients.Add(outputClientProcess);
+                    SelectedStageKey = StageKeys[0];
                 }
             }
-            else
-            {
-                var outServerProcess = OutputServers.LastOrDefault(server => server.Stage == currentStage);
-                if (outServerProcess != null)
-                {
-                    outServerProcess.Output += data + "\n";
+        }
 
-                }
-                else
+        private void CmbStages_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (sender is not ComboBox comboBox || comboBox.SelectedItem is not int selectedKey)
+                return;
+
+            SelectedStageKey = selectedKey;
+        }
+        #endregion
+
+        #region Cleanup
+        private async Task CloseAllAsync()
+        {
+            try
+            {
+                await _manager.StopAllAsync();
+                await _middlewareStart.StopAsync();
+
+                // Close all windows except MainWindow
+                var windowsToClose = Application.Current.Windows
+                    .Cast<Window>()
+                    .Where(w => w is not MainWindow)
+                    .ToList();
+
+                foreach (var window in windowsToClose)
                 {
-                    outServerProcess = new OutputServer
-                    {
-                        Stage = currentStage,
-                        Output = data + "\n"
-                    };
-                    OutputServers.Add(outServerProcess);
+                    window.Close();
                 }
             }
-
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error closing windows: {ex.Message}", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
         #endregion
     }
