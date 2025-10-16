@@ -4,7 +4,9 @@
         Title="Server Console" Height="300" Width="600">
     <DockPanel>
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="5">
+            <Button Content="Start Server Again" Width="100" Click="BtnStartServerAgain_Click"/>
             <Button Content="End Server" Width="100" Click="BtnEndServer_Click"/>
+
         </StackPanel>
         <TextBox x:Name="txtOutput" IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"/>
     </DockPanel>

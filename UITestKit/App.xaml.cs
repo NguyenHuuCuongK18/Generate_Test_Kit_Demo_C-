@@ -20,7 +20,7 @@ namespace UITestKit
         {
             // Gọi phương thức StopAll đồng bộ để đảm bảo client và server
             // được dừng hoàn toàn trước khi ứng dụng thoát.
-            ExecutableManager.Instance.StopAll();
+            ExecutableManager.Instance.StopAllAsync();
         }
     }
 

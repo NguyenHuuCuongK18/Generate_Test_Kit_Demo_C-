@@ -1,4 +1,5 @@
-﻿using System.Windows;
+﻿using System.Threading.Tasks;
+using System.Windows;
 using UITestKit.ServiceExcute;
 
 namespace UITestKit
@@ -21,8 +22,11 @@ namespace UITestKit
         {
             Recorder?.AddActionStage("ServerClose");
             await _manager.StopServerAsync();
-            this.Close();
         }
 
+        private  void BtnStartServerAgain_Click(object sender, RoutedEventArgs e)
+        {
+             _manager.StartServer();
+        }
     }
 }

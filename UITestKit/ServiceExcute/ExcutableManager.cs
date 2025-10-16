@@ -5,6 +5,7 @@ using System.Security.RightsManagement;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
+using UITestKit.Model;
 using UITestKit.Service;
 
 namespace UITestKit.ServiceExcute
@@ -16,6 +17,8 @@ namespace UITestKit.ServiceExcute
         public static ExecutableManager Instance => _instance.Value;
         private Process? _clientProcess;
         private Process? _serverProcess;
+        private string _clientPath;
+        private string _serverPath;
 
         public event Action<string>? ClientOutputReceived;
         public event Action<string>? ServerOutputReceived;
@@ -27,51 +30,29 @@ namespace UITestKit.ServiceExcute
         {
             Directory.CreateDirectory(_debugFolder);
         }
-        //load list ignore
-        //public void InitializeIgnoreList(string excelPath)
-        //{
-        //    try
-        //    {
-        //        var file = Path.Combine("D:\\CSharp_Project\\TestKitGenerator", "Ignore.xlsx");
-        //        _ignoreTexts = IgnoreListLoader.IgnoreLoader(file);
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        MessageBox.Show($"Không thể load file ignore: {ex.Message}");
-        //        _ignoreTexts = new HashSet<string>();
-        //    }
-        //}
-        // method check isIgnore
-        //private bool ShouldIgnore(string line)
-        //{
-        //    if (_ignoreTexts == null || _ignoreTexts.Count == 0)
-        //        return false;
-
-        //    foreach (var ignore in _ignoreTexts)
-        //    {
-        //        if (line.Contains(ignore, StringComparison.OrdinalIgnoreCase))
-        //            return true;
-        //    }
-        //    return false;
-        //}
-
-
         /// <summary>
         /// Khởi tạo sẵn thông tin process mà chưa chạy.
         /// </summary>
         public void Init(string clientPath, string serverPath)
         {
-            _clientProcess = CreateProcess(clientPath, msg =>
+            _clientPath = clientPath;
+            _serverPath = serverPath;
+            if (_clientProcess == null)
             {
-                ClientOutputReceived?.Invoke(msg);
-                AppendDebugFile("client.log", msg);
-            }, "Client");
-
-            _serverProcess = CreateProcess(serverPath, msg =>
+                _clientProcess = CreateProcess(clientPath, msg =>
+                {
+                    ClientOutputReceived?.Invoke(msg);
+                    AppendDebugFile("client.log", msg);
+                }, "Client");
+            }
+            if (_serverProcess == null)
             {
-                ServerOutputReceived?.Invoke(msg);
-                AppendDebugFile("server.log", msg);
-            }, "Server");
+                _serverProcess = CreateProcess(serverPath, msg =>
+                {
+                    ServerOutputReceived?.Invoke(msg);
+                    AppendDebugFile("server.log", msg);
+                }, "Server");
+            }
         }
 
         private Process CreateProcess(string exePath, Action<string> onOutput, string role)
@@ -100,13 +81,14 @@ namespace UITestKit.ServiceExcute
             return process;
         }
 
-        #region Start/Stop
+        #region Start
 
         /// <summary>
         /// Chạy server trước để middleware có thể kết nối.
         /// </summary>
         public void StartServer()
         {
+            Init(_clientPath, _serverPath);
             if (_serverProcess == null)
                 throw new InvalidOperationException("Server process not initialized.");
 
@@ -118,21 +100,16 @@ namespace UITestKit.ServiceExcute
         /// </summary>
         public void StartClient()
         {
+            Init(_clientPath, _serverPath);
             if (_clientProcess == null)
                 throw new InvalidOperationException("Client process not initialized.");
 
             StartProcessAndMonitor(_clientProcess, msg => ClientOutputReceived?.Invoke(msg), "client.log");
         }
 
-        /// <summary>
-        /// Trước đây là StartBoth, giữ lại nếu cần chạy song song.
-        /// </summary>
-        public void StartBoth()
-        {
-            StartServer();
-            StartClient();
-        }
+        #endregion
 
+        #region StartProcessAndMonitor
         private void StartProcessAndMonitor(Process process, Action<string> onOutput, string logFile)
         {
             process.Start();
@@ -289,39 +266,6 @@ namespace UITestKit.ServiceExcute
                 }
             });
         }
-
-        public void StopAll()
-        {
-            StopProcess(ref _clientProcess);
-            StopProcess(ref _serverProcess);
-        }
-
-        private void StopProcess(ref Process? process)
-        {
-            if (process == null) return;
-
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.CloseMainWindow();
-                    if (!process.WaitForExit(2000))
-                    {
-                        process.Kill(true);
-                        process.WaitForExit();
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[StopProcess ERR] {ex.Message}");
-            }
-            finally
-            {
-                process.Dispose();
-                process = null;
-            }
-        }
         #endregion
 
         #region Input/Output
@@ -343,6 +287,8 @@ namespace UITestKit.ServiceExcute
             }
             catch { }
         }
+        #endregion
+
         #region StopAllAsync
         public async Task StopAllAsync()
         {
@@ -350,12 +296,12 @@ namespace UITestKit.ServiceExcute
             try
             {
                 // Hiển thị loading dialog không chặn
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    dialog = new ProgressDialog("Đang dừng tất cả tiến trình...");
-                    dialog.Owner = Application.Current.MainWindow;
-                    dialog.Show(); // Không dùng ShowDialog -> không chặn luồng
-                });
+                //await Application.Current.Dispatcher.InvokeAsync(() =>
+                //{
+                //    dialog = new ProgressDialog("Đang dừng tất cả tiến trình...");
+                //    dialog.Owner = Application.Current.MainWindow;
+                //    dialog.Show(); // Không dùng ShowDialog -> không chặn luồng
+                //});
 
                 // Dừng tiến trình song song
                 var stopClientTask = StopProcessAsync(_clientProcess, "Client");
@@ -367,12 +313,12 @@ namespace UITestKit.ServiceExcute
                 _serverProcess = null;
 
                 // Đóng dialog sau khi dừng xong
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    dialog?.Close();
-                    MessageBox.Show("Tất cả tiến trình đã được dừng thành công.",
-                        "Thông báo", MessageBoxButton.OK, MessageBoxImage.Information);
-                });
+                //await Application.Current.Dispatcher.InvokeAsync(() =>
+                //{
+                //    dialog?.Close();
+                //    MessageBox.Show("Tất cả tiến trình đã được dừng thành công.",
+                //        "Thông báo", MessageBoxButton.OK, MessageBoxImage.Information);
+                //});
             }
             catch (Exception ex)
             {
@@ -393,24 +339,11 @@ namespace UITestKit.ServiceExcute
             try
             {
                 // Hiển thị loading dialog không chặn
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    dialog = new ProgressDialog("Đang dừng tiến trình client...");
-                    dialog.Owner = Application.Current.MainWindow;
-                    dialog.Show(); // Không dùng ShowDialog -> không chặn luồng
-                });
 
                 await StopProcessAsync(_clientProcess, "Client");
-
+                AppendDebugFile("Stop.log", "Before Client Kill");
                 _clientProcess = null;
 
-                // Đóng dialog sau khi dừng xong
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    dialog?.Close();
-                    MessageBox.Show("Tiến trình client đã được dừng thành công.",
-                        "Thông báo", MessageBoxButton.OK, MessageBoxImage.Information);
-                });
             }
             catch (Exception ex)
             {
@@ -421,6 +354,7 @@ namespace UITestKit.ServiceExcute
                         "Lỗi", MessageBoxButton.OK, MessageBoxImage.Error);
                 });
             }
+            AppendDebugFile("Stop.log", "After Client Kill");
         }
         #endregion
 
@@ -431,12 +365,6 @@ namespace UITestKit.ServiceExcute
             try
             {
                 // Hiển thị loading dialog không chặn
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    dialog = new ProgressDialog("Đang dừng tiến trình server...");
-                    dialog.Owner = Application.Current.MainWindow;
-                    dialog.Show(); // Không dùng ShowDialog -> không chặn luồng
-                });
 
                 await StopProcessAsync(_serverProcess, "Server");
 
@@ -462,53 +390,62 @@ namespace UITestKit.ServiceExcute
         }
         #endregion
 
+        #region StopProcessAsync method 
         private async Task StopProcessAsync(Process? process, string role)
         {
-            if (process == null) return;
+            if (process == null || process.HasExited) return;
 
-            int processId;
             try
             {
-                if (process.HasExited) return;
-                processId = process.Id;
+                var tcs = new TaskCompletionSource<bool>();
+                process.Exited += (sender, e) => tcs.TrySetResult(true);
+
+                await Task.Run(async () =>
+                {
+                    try
+                    {
+                        AppendDebugFile("Stop.log", $"[{role}] Before Kill");
+                        var killTask = Task.Run(() => process.Kill(false)); // Dùng Kill(false) cho console đơn giản
+                        var timeoutTask = Task.Delay(5000); // Timeout 5s
+                        var completedTask = await Task.WhenAny(killTask, timeoutTask);
+
+                        if (completedTask == timeoutTask)
+                        {
+                            AppendDebugFile($"{role.ToLower()}.log", $"[{role}] Kill timed out, process may still be running");
+                            // Fallback: Dùng taskkill nếu cần
+                            using (var taskKillProcess = new Process())
+                            {
+                                taskKillProcess.StartInfo = new ProcessStartInfo
+                                {
+                                    FileName = "taskkill",
+                                    Arguments = $"/F /PID {process.Id}",
+                                    UseShellExecute = false,
+                                    CreateNoWindow = true
+                                };
+                                taskKillProcess.Start();
+                                taskKillProcess.WaitForExit(2000);
+                            }
+                        }
+                        else
+                        {
+                            AppendDebugFile("Stop.log", $"[{role}] After Kill");
+                            await Task.WhenAny(tcs.Task, Task.Delay(1000)); // Chờ exited event
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendDebugFile($"{role.ToLower()}.log", $"[{role}] StopProcess ERR: {ex}");
+                    }
+                }).ConfigureAwait(false); // Tránh capture UI context
             }
             catch (InvalidOperationException)
             {
-                return;
+                // Process exited or invalid
             }
             finally
             {
                 try { process.Dispose(); } catch { }
             }
-
-            // Chuyển sang một luồng nền để thực thi lệnh taskkill mà không làm treo UI.
-            await Task.Run(() =>
-            {
-                try
-                {
-                    // Tạo một process mới chỉ để chạy lệnh taskkill
-                    using (var taskKillProcess = new Process())
-                    {
-                        var startInfo = taskKillProcess.StartInfo;
-                        startInfo.FileName = "taskkill";
-                        // /F: Buộc dừng (Force)
-                        // /T: Dừng cả các process con (Tree)
-                        // /PID: Dừng theo Process ID
-                        startInfo.Arguments = $"/F /PID {processId} /T";
-                        startInfo.UseShellExecute = false;
-                        startInfo.CreateNoWindow = true; // Chạy ẩn, không hiện cửa sổ cmd
-
-                        taskKillProcess.Start();
-                        taskKillProcess.WaitForExit(3000); 
-
-                        AppendDebugFile($"{role.ToLower()}.log", $"[{role}] Termination command sent to process ID {processId} via taskkill.");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    AppendDebugFile($"{role.ToLower()}.log", $"[StopProcess ERR] Exception during taskkill: {ex}");
-                }
-            });
         }
         #endregion
     }

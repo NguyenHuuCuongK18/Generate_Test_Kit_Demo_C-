@@ -100,10 +100,14 @@ namespace UITestKit
                     Protocol = protocol,
                 };
 
-                string json = System.Text.Json.JsonSerializer.Serialize(config,
-                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                //ConfigModel.Instance.ClientPath = clientPath;
+                //ConfigModel.Instance.ServerPath = serverPath;
 
-                File.WriteAllText(_configFilePath, json);
+
+                //string json = System.Text.Json.JsonSerializer.Serialize(config,
+                //    new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+                //File.WriteAllText(_configFilePath, json);
                 // Ghi de appsettings
                 string destServer = Path.GetDirectoryName(serverPath)!;
                 AppSettingHandling.ReplaceAppSetting(templateServer, destServer,"appsettings.json",replaceOnlyPublish: false);
@@ -127,10 +131,6 @@ namespace UITestKit
                     await _middlewareStart.StartAsync(useHttp: false);
                 }
                 _manager.StartClient();
-                
-
-                System.Windows.MessageBox.Show($"Configuration saved to:\n{_configFilePath}", "Success",
-                    MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
@@ -141,7 +141,7 @@ namespace UITestKit
 
         private void BtnCancel_Click(object sender, RoutedEventArgs e)
         {
-            _manager.StopAll();
+            _manager.StopAllAsync();
             Close();
         }
 
