@@ -1,0 +1,44 @@
+﻿<UserControl x:Class="UITestKit.RecorderWindowContent"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Background="White">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Background="#34495E" Padding="10">
+            <StackPanel Orientation="Horizontal">
+                <Button Content="⏹ Stop" Padding="10,5" Margin="0,0,5,0"
+                        x:Name="BtnStopRecord" Click="BtnStopRecord_Click"
+                        Background="#E74C3C" Foreground="White" BorderThickness="0" Cursor="Hand"/>
+                <Button Content="💾 Save" Padding="10,5" Margin="0,0,5,0"
+                        x:Name="BtnSave" Click="BtnSave_Click"
+                        Background="#3498DB" Foreground="White" BorderThickness="0" Cursor="Hand"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Main Content Area - Wrapped in Grid for overlay support -->
+        <Border Grid.Row="1" BorderBrush="#BDC3C7" BorderThickness="1" Margin="10">
+            <!-- 🔑 IMPORTANT: Grid wrapper để có thể add overlay -->
+            <Grid x:Name="RecorderContentArea">
+                <!-- Placeholder khi khởi tạo -->
+                <TextBlock Text="Initializing Test Kit..." 
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           FontSize="16" Foreground="Gray"/>
+                <!-- RecorderWindow content sẽ được add vào đây -->
+            </Grid>
+        </Border>
+
+        <!-- Status Bar -->
+        <Border Grid.Row="2" Background="#ECF0F1" BorderBrush="#BDC3C7" BorderThickness="0,1,0,0">
+            <DockPanel Height="25" LastChildFill="True">
+                <TextBlock x:Name="StatusText" Text="Ready" 
+                           VerticalAlignment="Center" Margin="10,0,0,0"
+                           FontSize="11" Foreground="#34495E"/>
+            </DockPanel>
+        </Border>
+    </Grid>
+</UserControl>

@@ -4,12 +4,10 @@ using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Forms;
 using UITestKit.MiddlewareHandling;
 using UITestKit.Model;
 using UITestKit.ServiceExcute;
 using UITestKit.ServiceSetting;
-using UITestKit.Views;
 using MessageBox = System.Windows.MessageBox;
 using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
 
@@ -17,13 +15,12 @@ namespace UITestKit
 {
     public partial class MainWindow : Window
     {
-        private readonly ExecutableManager _manager = ExecutableManager.Instance;
-        private readonly MiddlewareStart _middlewareStart = MiddlewareStart.Instance;
-
         // Luôn lưu config vào AppData để chắc chắn có quyền ghi
         private readonly string _configFolder =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "UITestKit");
         private readonly string _configFilePath;
+
+        public ConfigModel SavedConfig { get; private set; }
 
         public MainWindow()
         {
@@ -66,7 +63,7 @@ namespace UITestKit
                 txtSaveLocation.Text = dialog.SelectedPath;
         }
 
-        private async void BtnSave_Click(object sender, RoutedEventArgs e)
+        private void BtnSave_Click(object sender, RoutedEventArgs e)
         {
             try
             {
@@ -91,57 +88,45 @@ namespace UITestKit
                     return;
                 }
 
-                var config = new ConfigModel
+                // Tạo config object
+                SavedConfig = new ConfigModel
                 {
                     ClientPath = clientPath,
                     ServerPath = serverPath,
                     SaveLocation = saveLocation,
                     ProjectName = projectName,
                     Protocol = protocol,
+                    ClientAppSettings = templateClient,
+                    ServerAppSettings = templateServer
                 };
 
-                //ConfigModel.Instance.ClientPath = clientPath;
-                //ConfigModel.Instance.ServerPath = serverPath;
+                // Lưu config vào file
+                string json = System.Text.Json.JsonSerializer.Serialize(SavedConfig,
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(_configFilePath, json);
 
-
-                //string json = System.Text.Json.JsonSerializer.Serialize(config,
-                //    new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-
-                //File.WriteAllText(_configFilePath, json);
-                // Ghi de appsettings
+                // Replace appsettings (prepare for future use)
                 string destServer = Path.GetDirectoryName(serverPath)!;
-                AppSettingHandling.ReplaceAppSetting(templateServer, destServer,"appsettings.json",replaceOnlyPublish: false);
+                AppSettingHandling.ReplaceAppSetting(templateServer, destServer, "appsettings.json", replaceOnlyPublish: false);
                 string destClient = Path.GetDirectoryName(clientPath)!;
                 AppSettingHandling.ReplaceAppSetting(templateClient, destClient, "appsettings.json", false);
 
+                MessageBox.Show("Configuration saved successfully!\nYou can now create Test Kits.", "Success",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
 
-                // Start exe
-                _manager.Init(clientPath, serverPath);
-
-                var recorder = new RecorderWindow(_manager,saveLocation);
-                recorder.Show();
-
-                _manager.StartServer();
-                if (protocol.Equals("HTTP", StringComparison.OrdinalIgnoreCase))
-                {
-                    await _middlewareStart.StartAsync(useHttp: true);
-                }
-                else if (protocol.Equals("TCP", StringComparison.OrdinalIgnoreCase))
-                {
-                    await _middlewareStart.StartAsync(useHttp: false);
-                }
-                _manager.StartClient();
+                this.DialogResult = true;
+                this.Close();
             }
             catch (Exception ex)
             {
-                System.Windows.MessageBox.Show($"Error saving config:\n{ex.Message}", "Error",
+                MessageBox.Show($"Error saving config:\n{ex.Message}", "Error",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
         private void BtnCancel_Click(object sender, RoutedEventArgs e)
         {
-            _manager.StopAllAsync();
+            this.DialogResult = false;
             Close();
         }
 
@@ -171,7 +156,6 @@ namespace UITestKit
             }
         }
 
-
         private void LoadConfig()
         {
             try
@@ -187,16 +171,26 @@ namespace UITestKit
                         txtServerPath.Text = config.ServerPath;
                         txtSaveLocation.Text = config.SaveLocation;
                         txtProjectName.Text = config.ProjectName;
+                        txtClientAppSettings.Text = config.ClientAppSettings;
+                        txtServerAppSettings.Text = config.ServerAppSettings;
+
+                        // Set protocol
+                        for (int i = 0; i < cbProtocol.Items.Count; i++)
+                        {
+                            if (((ComboBoxItem)cbProtocol.Items[i]).Content.ToString() == config.Protocol)
+                            {
+                                cbProtocol.SelectedIndex = i;
+                                break;
+                            }
+                        }
                     }
                 }
             }
             catch (Exception ex)
             {
-                System.Windows.MessageBox.Show($"Error loading config:\n{ex.Message}", "Error",
+                MessageBox.Show($"Error loading config:\n{ex.Message}", "Error",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
     }
-
-   
 }

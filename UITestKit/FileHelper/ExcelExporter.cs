@@ -170,4 +170,36 @@ public class ExcelExporter
             }
         }
     }
+
+    /// <summary>
+    /// Wrapper method để export TestKit data
+    /// </summary>
+    public void ExportTestKitData(string filePath, Dictionary<int, TestStage> testStages)
+    {
+        var sheetsList = new List<(string SheetName, ICollection<object> Data)>();
+
+        // Collect all data from all stages
+        var allInputClients = new List<object>();
+        var allOutputClients = new List<object>();
+        var allOutputServers = new List<object>();
+
+        foreach (var stage in testStages.OrderBy(s => s.Key))
+        {
+            allInputClients.AddRange(stage.Value.InputClients.Cast<object>());
+            allOutputClients.AddRange(stage.Value.OutputClients.Cast<object>());
+            allOutputServers.AddRange(stage.Value.OutputServers.Cast<object>());
+        }
+
+        if (allInputClients.Any())
+            sheetsList.Add(("InputClients", allInputClients));
+
+        if (allOutputClients.Any())
+            sheetsList.Add(("OutputClients", allOutputClients));
+
+        if (allOutputServers.Any())
+            sheetsList.Add(("OutputServers", allOutputServers));
+
+        // Use existing method
+        ExportToExcelParams(filePath, sheetsList.ToArray());
+    }
 }

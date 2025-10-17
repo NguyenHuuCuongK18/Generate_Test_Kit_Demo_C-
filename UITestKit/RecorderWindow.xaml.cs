@@ -1,5 +1,4 @@
-﻿// UITestKit/RecorderWindow.xaml.cs
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
@@ -8,7 +7,6 @@ using UITestKit.MiddlewareHandling;
 using UITestKit.Model;
 using UITestKit.Service;
 using UITestKit.ServiceExcute;
-using Application = System.Windows.Application;
 using MessageBox = System.Windows.MessageBox;
 
 namespace UITestKit
@@ -19,9 +17,12 @@ namespace UITestKit
         private readonly MiddlewareStart _middlewareStart = MiddlewareStart.Instance;
         private readonly HashSet<string> _ignoreTexts = new HashSet<string>();
 
-        private int _stepCounter = 0;
+        // 🔑 REMOVED: private int _stepCounter = 0;
+        // Stage counter sẽ được tính động dựa trên StageKeys hiện có
+
         private int _selectedStageKey = -1;
         private TestStage _selectedStageData = new TestStage();
+        private bool _isDisposed = false;
 
         public Dictionary<int, TestStage> TestStages { get; } = new Dictionary<int, TestStage>();
         public ObservableCollection<int> StageKeys { get; } = new ObservableCollection<int>();
@@ -65,9 +66,9 @@ namespace UITestKit
             _manager = manager;
             InitializeIgnoreList();
 
-            // Subscribe events
-            _manager.ClientOutputReceived += data => Dispatcher.Invoke(() => HandleProcessOutput(true, data));
-            _manager.ServerOutputReceived += data => Dispatcher.Invoke(() => HandleProcessOutput(false, data));
+            // Subscribe events với named methods để có thể unsubscribe sau
+            _manager.ClientOutputReceived += OnClientOutputReceived;
+            _manager.ServerOutputReceived += OnServerOutputReceived;
             _middlewareStart.Recorder = this;
 
             // Launch console windows
@@ -85,6 +86,22 @@ namespace UITestKit
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
+        #endregion
+
+        #region Event Handlers (Named methods để có thể unsubscribe)
+
+        private void OnClientOutputReceived(string data)
+        {
+            if (_isDisposed) return;
+            Dispatcher.Invoke(() => HandleProcessOutput(true, data));
+        }
+
+        private void OnServerOutputReceived(string data)
+        {
+            if (_isDisposed) return;
+            Dispatcher.Invoke(() => HandleProcessOutput(false, data));
+        }
+
         #endregion
 
         #region Ignore List Handling
@@ -122,28 +139,77 @@ namespace UITestKit
         #endregion
 
         #region Stage Management
+
+        /// <summary>
+        /// 🔑 FIXED: Tính stage number động dựa trên StageKeys hiện có
+        /// </summary>
         public void AddActionStage(string action, string input = "", string dataType = "")
         {
-            _stepCounter++;
+            if (_isDisposed) return;
+
+            // 🔑 Tính next stage number dựa trên StageKeys hiện có
+            int nextStageNumber = GetNextStageNumber();
 
             var testStage = new TestStage();
             testStage.InputClients.Add(new Input_Client
             {
-                Stage = _stepCounter,
+                Stage = nextStageNumber,
                 Input = input,
                 DataType = dataType,
                 Action = action
             });
 
-            TestStages[_stepCounter] = testStage;
-            StageKeys.Add(_stepCounter);
-            SelectedStageKey = _stepCounter;
+            TestStages[nextStageNumber] = testStage;
+            StageKeys.Add(nextStageNumber);
+            SelectedStageKey = nextStageNumber;
+
+            OnPropertyChanged(nameof(TestStages));
+            OnPropertyChanged(nameof(StageKeys));
+            OnPropertyChanged(nameof(SelectedStageKey));
+
+            System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Added Stage {nextStageNumber} - Action: {action}");
         }
+
+        /// <summary>
+        /// 🔑 NEW METHOD: Tính next stage number
+        /// Nếu có stage bị xóa ở giữa, sẽ fill vào gap đó
+        /// </summary>
+        private int GetNextStageNumber()
+        {
+            // Nếu chưa có stage nào, return 1
+            if (!StageKeys.Any())
+            {
+                return 1;
+            }
+
+            // Tìm gap (khoảng trống) trong stage numbering
+            var sortedKeys = StageKeys.OrderBy(k => k).ToList();
+
+            for (int i = 0; i < sortedKeys.Count; i++)
+            {
+                int expectedStage = i + 1;
+                int actualStage = sortedKeys[i];
+
+                // Nếu tìm thấy gap, return số đó
+                if (actualStage != expectedStage)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Found gap at stage {expectedStage}");
+                    return expectedStage;
+                }
+            }
+
+            // Nếu không có gap, return max + 1
+            int nextStage = sortedKeys.Max() + 1;
+            System.Diagnostics.Debug.WriteLine($"[RecorderWindow] No gap found, next stage: {nextStage}");
+            return nextStage;
+        }
+
         #endregion
 
         #region HandleProcessOutput
         private void HandleProcessOutput(bool isClient, string data)
         {
+            if (_isDisposed) return;
             if (!TestStages.Any()) return;
             if (ShouldIgnore(data)) return;
 
@@ -180,6 +246,8 @@ namespace UITestKit
             string data,
             Func<T> createNew) where T : class
         {
+            if (_isDisposed) return;
+
             var existingItem = collection.LastOrDefault(item =>
             {
                 var stageProp = item.GetType().GetProperty("Stage");
@@ -211,104 +279,161 @@ namespace UITestKit
         #endregion
 
         #region Button Click Handlers
-        private async void BtnSubmit_Click(object sender, RoutedEventArgs e)
+
+        /// <summary>
+        /// 🔑 ENHANCED: Xóa stage và tất cả data liên quan
+        /// Stage numbering sẽ được reuse cho stage mới
+        /// </summary>
+        private void BtnDeleteStage_Click(object sender, RoutedEventArgs e)
         {
+            if (_isDisposed)
+            {
+                MessageBox.Show("Cannot delete stage - RecorderWindow is disposed", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (SelectedStageKey <= 0 || !TestStages.ContainsKey(SelectedStageKey))
+            {
+                MessageBox.Show("Please select a valid stage to delete.", "No Stage Selected",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            // Không cho phép xóa nếu chỉ còn 1 stage
+            if (TestStages.Count <= 1)
+            {
+                MessageBox.Show("Cannot delete the last stage. At least one stage must remain.", "Delete Not Allowed",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
             try
             {
-                var exporter = new ExcelExporter();
-                string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-                string projectRootPath = Path.GetFullPath(Path.Combine(baseDirectory, @"..\..\..\.."));
-                string pathExport = Path.Combine(projectRootPath, "TestResult.xlsx");
+                int stageToDelete = SelectedStageKey;
+                var stageData = TestStages[stageToDelete];
 
-                // TODO: Implement export logic
-                // exporter.ExportToExcel(pathExport, TestStages);
+                // 🔑 Hiển thị thông tin stage sẽ bị xóa
+                int inputCount = stageData.InputClients.Count;
+                int outputClientCount = stageData.OutputClients.Count;
+                int outputServerCount = stageData.OutputServers.Count;
 
-                await CloseAllAsync();
-                MessageBox.Show("Exported to TestResult.xlsx", "Success",
-                    MessageBoxButton.OK, MessageBoxImage.Information);
+                var result = MessageBox.Show(
+                    $"Delete Stage {stageToDelete}?\n\n" +
+                    $"This will permanently delete:\n" +
+                    $"• {inputCount} Input Client(s)\n" +
+                    $"• {outputClientCount} Output Client(s)\n" +
+                    $"• {outputServerCount} Output Server(s)\n\n" +
+                    $"Stage {stageToDelete} will become available for new stages.",
+                    "Confirm Delete Stage",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+
+                if (result == MessageBoxResult.Yes)
+                {
+                    TestStages.Remove(stageToDelete);
+
+                    StageKeys.Remove(stageToDelete);
+
+                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Deleted Stage {stageToDelete}");
+                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] - Deleted {inputCount} InputClients");
+                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] - Deleted {outputClientCount} OutputClients");
+                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] - Deleted {outputServerCount} OutputServers");
+                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] - Stage {stageToDelete} will be reused for next new stage");
+
+                    if (StageKeys.Count > 0)
+                    {
+                        int newSelectedStage;
+
+                        var higherStages = StageKeys.Where(k => k > stageToDelete).OrderBy(k => k).ToList();
+                        if (higherStages.Any())
+                        {
+                            newSelectedStage = higherStages.First();
+                        }
+                        else
+                        {
+                            newSelectedStage = StageKeys.OrderByDescending(k => k).First();
+                        }
+
+                        SelectedStageKey = newSelectedStage;
+                    }
+                    else
+                    {
+                        SelectedStageData = new TestStage();
+                        SelectedStageKey = -1;
+                    }
+
+                    // 🔑 STEP 5: Notify UI update
+                    OnPropertyChanged(nameof(TestStages));
+                    OnPropertyChanged(nameof(StageKeys));
+                    OnPropertyChanged(nameof(SelectedStageData));
+                    OnPropertyChanged(nameof(SelectedStageKey));
+
+                    MessageBox.Show(
+                        $"Stage {stageToDelete} deleted successfully.\n\n" +
+                        $"Remaining stages: {StageKeys.Count}\n" +
+                        $"Next new stage will be: {GetNextStageNumber()}",
+                        "Stage Deleted",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Export failed: {ex.Message}", "Error",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
+                MessageBox.Show(
+                    $"Error deleting stage:\n{ex.Message}",
+                    "Delete Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
 
-        private async void BtnCloseAll_Click(object sender, RoutedEventArgs e)
-        {
-            await CloseAllAsync();
-        }
-
-        private void BtnAddStage_Click(object sender, RoutedEventArgs e)
-        {
-            // TODO: Implement add stage dialog
-            AddActionStage("New Action");
-        }
-
-        private void BtnUpdateStage_Click(object sender, RoutedEventArgs e)
-        {
-            // TODO: Implement update stage logic
-            if (SelectedStageKey > 0)
-            {
-                OnPropertyChanged(nameof(SelectedStageData));
-            }
-        }
-
-        private void BtnDeleteStage_Click(object sender, RoutedEventArgs e)
-        {
-            if (SelectedStageKey <= 0 || !TestStages.ContainsKey(SelectedStageKey))
-                return;
-
-            var result = MessageBox.Show($"Delete Stage {SelectedStageKey}?", "Confirm Delete",
-                MessageBoxButton.YesNo, MessageBoxImage.Question);
-
-            if (result == MessageBoxResult.Yes)
-            {
-                TestStages.Remove(SelectedStageKey);
-                StageKeys.Remove(SelectedStageKey);
-
-                // Select next available stage
-                if (StageKeys.Count > 0)
-                {
-                    SelectedStageKey = StageKeys[0];
-                }
+                System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Delete stage error: {ex}");
             }
         }
 
         private void CmbStages_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (_isDisposed) return;
             if (sender is not ComboBox comboBox || comboBox.SelectedItem is not int selectedKey)
                 return;
 
             SelectedStageKey = selectedKey;
         }
+
         #endregion
 
-        #region Cleanup
-        private async Task CloseAllAsync()
+        #region Cleanup & Dispose
+
+        /// <summary>
+        /// 🔑 FIXED: Cleanup KHÔNG clear data
+        /// Chỉ unsubscribe events và clear middleware reference
+        /// GIỮ NGUYÊN TestStages và StageKeys để có thể xem lại
+        /// </summary>
+        public void Cleanup()
         {
+            if (_isDisposed) return;
+
+            _isDisposed = true;
+
             try
             {
-                await _manager.StopAllAsync();
-                await _middlewareStart.StopAsync();
+                // Unsubscribe events từ ExecutableManager
+                _manager.ClientOutputReceived -= OnClientOutputReceived;
+                _manager.ServerOutputReceived -= OnServerOutputReceived;
 
-                // Close all windows except MainWindow
-                var windowsToClose = Application.Current.Windows
-                    .Cast<Window>()
-                    .Where(w => w is not MainWindow)
-                    .ToList();
-
-                foreach (var window in windowsToClose)
+                // Clear middleware reference
+                if (_middlewareStart.Recorder == this)
                 {
-                    window.Close();
+                    _middlewareStart.Recorder = null;
                 }
+
+                System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Cleanup completed - events unsubscribed, data preserved");
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error closing windows: {ex.Message}", "Error",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Cleanup error: {ex.Message}");
             }
         }
+
         #endregion
     }
 }

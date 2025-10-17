@@ -6,22 +6,28 @@
     <DockPanel>
         <!-- Top Button Bar -->
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="5">
-            <Button Content="Close All" Width="100" Margin="5,0,0,0" Click="BtnCloseAll_Click"/>
-            <Button Content="Submit" Width="100" Margin="5,0,0,0" Click="BtnSubmit_Click"/>
-            <Button Content="Add Stage" Width="100" Margin="5,0,0,0" Click="BtnAddStage_Click"/>
-            <Button Content="Update Stage" Width="100" Margin="5,0,0,0" Click="BtnUpdateStage_Click"/>
-            <Button Content="Delete Stage" Width="100" Margin="5,0,0,0" Click="BtnDeleteStage_Click"/>
+            <Button Content="🗑️ Delete Stage" Width="120" Margin="5,0,0,0" 
+                    Click="BtnDeleteStage_Click"
+                    Background="#E74C3C" Foreground="White"
+                    BorderThickness="0" Cursor="Hand"
+                    Padding="5"
+                    ToolTip="Delete the selected stage and all its data"/>
         </StackPanel>
 
         <!-- Stage Selection ComboBox -->
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="5">
-            <Label Content="Select Stage:" Margin="5,0,0,0" VerticalAlignment="Center"/>
+            <Label Content="Select Stage:" Margin="5,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
             <ComboBox x:Name="cmbStages"
                       ItemsSource="{Binding StageKeys}"
                       SelectedValue="{Binding SelectedStageKey, Mode=TwoWay}"
                       SelectionChanged="CmbStages_SelectionChanged"
                       Width="200"
-                      VerticalAlignment="Center"/>
+                      VerticalAlignment="Center"
+                      FontSize="12"/>
+            <TextBlock Margin="10,0,0,0" VerticalAlignment="Center" Foreground="Gray">
+                <Run Text="Total Stages: "/>
+                <Run Text="{Binding StageKeys.Count, Mode=OneWay}" FontWeight="Bold"/>
+            </TextBlock>
         </StackPanel>
 
         <!-- Main Content Area - Split Top/Bottom -->
