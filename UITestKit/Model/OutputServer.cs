@@ -7,7 +7,7 @@
         public string DataRequest { get; set; }
         public string Output { get; set; }
         public string DataTypeMiddleware { get; set; }
-        public int ByteSize { get; set; }
+        public string ByteSize { get; set; }
 
     }
 }

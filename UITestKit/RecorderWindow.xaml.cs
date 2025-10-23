@@ -25,7 +25,7 @@ namespace UITestKit
         private int _selectedStageKey = -1;
         private TestStage _selectedStageData = new TestStage();
         private bool _isDisposed = false;
-        private bool _isReadOnly = false; // 🔑 NEW
+        private bool _isReadOnly = false;
 
         public Dictionary<int, TestStage> TestStages { get; } = new Dictionary<int, TestStage>();
         public ObservableCollection<int> StageKeys { get; } = new ObservableCollection<int>();
@@ -61,9 +61,6 @@ namespace UITestKit
             }
         }
 
-        /// <summary>
-        /// 🔑 UPDATED: Constructor với read-only mode support
-        /// </summary>
         public RecorderWindow(ExecutableManager manager, string path, bool isReadOnly = false)
         {
             InitializeComponent();
@@ -76,7 +73,6 @@ namespace UITestKit
 
             if (!_isReadOnly)
             {
-                // Normal mode: subscribe events và launch consoles
                 _manager.ClientOutputReceived += OnClientOutputReceived;
                 _manager.ServerOutputReceived += OnServerOutputReceived;
                 _middlewareStart.Recorder = this;
@@ -86,7 +82,6 @@ namespace UITestKit
 
                 AddActionStage("Connect");
             }
-            // Read-only mode: không subscribe events, không launch consoles, không add initial stage
         }
 
         #region INotifyPropertyChanged
@@ -151,7 +146,7 @@ namespace UITestKit
         #region Stage Management
         public void AddActionStage(string action, string input = "", string dataType = "")
         {
-            if (_isDisposed || _isReadOnly) return; // 🔑 Prevent adding in read-only mode
+            if (_isDisposed || _isReadOnly) return;
 
             int nextStageNumber = GetNextStageNumber();
 
@@ -205,7 +200,7 @@ namespace UITestKit
         #region HandleProcessOutput
         private void HandleProcessOutput(bool isClient, string data)
         {
-            if (_isDisposed || _isReadOnly) return; // 🔑 Prevent handling output in read-only mode
+            if (_isDisposed || _isReadOnly) return;
             if (!TestStages.Any()) return;
             if (ShouldIgnore(data)) return;
 
@@ -274,11 +269,11 @@ namespace UITestKit
         }
         #endregion
 
-        #region Button Click Handlers
+        #region Button Click Handlers - Delete Stage
 
         private void BtnDeleteStage_Click(object sender, RoutedEventArgs e)
         {
-            if (_isDisposed || _isReadOnly) return; // 🔑 Prevent deletion in read-only mode
+            if (_isDisposed || _isReadOnly) return;
 
             if (SelectedStageKey <= 0 || !TestStages.ContainsKey(SelectedStageKey))
             {
@@ -363,6 +358,179 @@ namespace UITestKit
                     MessageBoxImage.Error);
             }
         }
+
+        #endregion
+
+        #region Button Click Handlers - Delete Individual Items
+
+        /// <summary>
+        /// 🆕 Delete selected Input Client row
+        /// </summary>
+        private void BtnDeleteInputClient_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isDisposed || _isReadOnly) return;
+
+            if (SelectedStageData == null || SelectedStageData.InputClients.Count == 0)
+            {
+                MessageBox.Show("No Input Client data available to delete.", "No Data",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (dgInputClients.SelectedItem is not Input_Client selectedItem)
+            {
+                MessageBox.Show("Please select an Input Client row to delete.", "No Selection",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            try
+            {
+                var result = MessageBox.Show(
+                    $"Delete Input Client?\n\n" +
+                    $"Stage: {selectedItem.Stage}\n" +
+                    $"Action: {selectedItem.Action}\n" +
+                    $"Input: {selectedItem.Input}\n" +
+                    $"DataType: {selectedItem.DataType}\n\n" +
+                    $"This action cannot be undone.",
+                    "Confirm Delete Input Client",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+
+                if (result == MessageBoxResult.Yes)
+                {
+                    SelectedStageData.InputClients.Remove(selectedItem);
+                    OnPropertyChanged(nameof(SelectedStageData));
+
+                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Deleted Input Client - Stage: {selectedItem.Stage}, Action: {selectedItem.Action}");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Error deleting Input Client:\n{ex.Message}",
+                    "Delete Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        /// <summary>
+        /// 🆕 Delete selected Output Client row
+        /// </summary>
+        private void BtnDeleteOutputClient_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isDisposed || _isReadOnly) return;
+
+            if (SelectedStageData == null || SelectedStageData.OutputClients.Count == 0)
+            {
+                MessageBox.Show("No Output Client data available to delete.", "No Data",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (dgOutputClients.SelectedItem is not OutputClient selectedItem)
+            {
+                MessageBox.Show("Please select an Output Client row to delete.", "No Selection",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            try
+            {
+                var outputPreview = selectedItem.Output?.Length > 100
+                    ? selectedItem.Output.Substring(0, 100) + "..."
+                    : selectedItem.Output;
+
+                var result = MessageBox.Show(
+                    $"Delete Output Client?\n\n" +
+                    $"Stage: {selectedItem.Stage}\n" +
+                    $"Method: {selectedItem.Method}\n" +
+                    $"Status: {selectedItem.StatusCode}\n" +
+                    $"DataType: {selectedItem.DataTypeMiddleWare}\n" +
+                    $"Output: {outputPreview}\n\n" +
+                    $"This action cannot be undone.",
+                    "Confirm Delete Output Client",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+
+                if (result == MessageBoxResult.Yes)
+                {
+                    SelectedStageData.OutputClients.Remove(selectedItem);
+                    OnPropertyChanged(nameof(SelectedStageData));
+
+                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Deleted Output Client - Stage: {selectedItem.Stage}, Method: {selectedItem.Method}");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Error deleting Output Client:\n{ex.Message}",
+                    "Delete Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        /// <summary>
+        /// 🆕 Delete selected Output Server row
+        /// </summary>
+        private void BtnDeleteOutputServer_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isDisposed || _isReadOnly) return;
+
+            if (SelectedStageData == null || SelectedStageData.OutputServers.Count == 0)
+            {
+                MessageBox.Show("No Output Server data available to delete.", "No Data",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (dgOutputServers.SelectedItem is not OutputServer selectedItem)
+            {
+                MessageBox.Show("Please select an Output Server row to delete.", "No Selection",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            try
+            {
+                var outputPreview = selectedItem.Output?.Length > 100
+                    ? selectedItem.Output.Substring(0, 100) + "..."
+                    : selectedItem.Output;
+
+                var result = MessageBox.Show(
+                    $"Delete Output Server?\n\n" +
+                    $"Stage: {selectedItem.Stage}\n" +
+                    $"Method: {selectedItem.Method}\n" +
+                    $"DataType: {selectedItem.DataTypeMiddleware}\n" +
+                    $"Output: {outputPreview}\n\n" +
+                    $"This action cannot be undone.",
+                    "Confirm Delete Output Server",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+
+                if (result == MessageBoxResult.Yes)
+                {
+                    SelectedStageData.OutputServers.Remove(selectedItem);
+                    OnPropertyChanged(nameof(SelectedStageData));
+
+                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Deleted Output Server - Stage: {selectedItem.Stage}, Method: {selectedItem.Method}");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Error deleting Output Server:\n{ex.Message}",
+                    "Delete Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        #endregion
+
+        #region ComboBox Selection Handler
 
         private void CmbStages_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {

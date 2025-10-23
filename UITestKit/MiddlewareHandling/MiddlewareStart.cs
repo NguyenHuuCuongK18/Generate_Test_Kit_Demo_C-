@@ -188,7 +188,7 @@ namespace UITestKit.MiddlewareHandling
                     {
                         existingOutputServer.Method = request.HttpMethod;
                         existingOutputServer.DataTypeMiddleware = requestDataType;
-                        existingOutputServer.ByteSize = requestBytes.Length;
+                        existingOutputServer.ByteSize = requestBytes.Length.ToString();
                         existingOutputServer.DataRequest = requestBody;
                     }
                     else
@@ -198,7 +198,7 @@ namespace UITestKit.MiddlewareHandling
                             Stage = stage,
                             Method = request.HttpMethod,
                             DataTypeMiddleware = requestDataType,
-                            ByteSize = requestBytes.Length,
+                            ByteSize = requestBytes.Length.ToString(),
                             DataRequest = requestBody,
                         });
                     }
@@ -232,8 +232,8 @@ namespace UITestKit.MiddlewareHandling
                         {
                             exitstingOutputClient.Method = request.HttpMethod;
                             exitstingOutputClient.DataTypeMiddleWare = responseDataType;
-                            exitstingOutputClient.ByteSize = responseBytes.Length;
-                            exitstingOutputClient.StatusCode = (int)responseMessage.StatusCode;
+                            exitstingOutputClient.ByteSize = responseBytes.Length.ToString();
+                            exitstingOutputClient.StatusCode = responseMessage.StatusCode.ToString();
                             exitstingOutputClient.DataResponse = responseBody;
                         }
                         else
@@ -243,8 +243,8 @@ namespace UITestKit.MiddlewareHandling
                                 Stage = stage,
                                 Method = request.HttpMethod,
                                 DataTypeMiddleWare = responseDataType,
-                                ByteSize = responseBytes.Length,
-                                StatusCode = (int)responseMessage.StatusCode,
+                                ByteSize = responseBytes.Length.ToString(),
+                                StatusCode = responseMessage.StatusCode.ToString(),
                                 DataResponse = responseBody
                             });
                         }
@@ -375,7 +375,7 @@ namespace UITestKit.MiddlewareHandling
                                     Method = "TCP",
                                     DataRequest = data,
                                     DataTypeMiddleware = dataType,
-                                    ByteSize = byteSize
+                                    ByteSize = byteSize.ToString()
                                 });
                             }
                         }
@@ -398,7 +398,7 @@ namespace UITestKit.MiddlewareHandling
                                     Method = "TCP",
                                     DataResponse = data,
                                     DataTypeMiddleWare = dataType,
-                                    ByteSize = byteSize
+                                    ByteSize = byteSize.ToString()
                                 });
                             }
                         }

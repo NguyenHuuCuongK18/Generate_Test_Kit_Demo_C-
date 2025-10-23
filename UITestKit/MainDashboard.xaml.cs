@@ -17,6 +17,7 @@ namespace UITestKit
         private Dictionary<string, RecorderWindowTab> _activeTabs = new Dictionary<string, RecorderWindowTab>();
         private RecorderWindowTab _currentActiveTab = null;
         private bool _isConfigured = false;
+        private int numberTestkit = 1;
 
         private ConfigModel _config;
         private MiddlewareStart _middlewareStart = MiddlewareStart.Instance;
@@ -352,11 +353,15 @@ namespace UITestKit
 
                     string tabId = Guid.NewGuid().ToString();
                     CreateNewRecorderTab(tabId, testKitName, testKitFolderPath);
-
+                    var pathProject = Path.Combine(_config.SaveLocation, _config.ProjectName);
+                    var fileWrite = Path.Combine(pathProject, "Header.xlsx");
+                    var excelWrite = new ExcelExporter();
+                    excelWrite.WriteColumnInExcel(fileWrite, testKitName,1, numberTestkit + 1);
                     _folderManager.RefreshTreeView(FolderTreeView);
-
                     LogMessage($"🆕 Created new Test Kit: {testKitName}");
                     LogMessage($"   Folder: {testKitFolderPath}");
+                    numberTestkit++;
+
                 }
                 catch (Exception ex)
                 {

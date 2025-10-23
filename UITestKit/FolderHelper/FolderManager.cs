@@ -708,11 +708,11 @@ namespace UITestKit.Services
                     {
                         Stage = stage.Value,
                         Method = SafeGetString(worksheet.Cells[row, 2].Value),
-                        StatusCode = SafeGetInt(worksheet.Cells[row, 3].Value) ?? 0,
+                        StatusCode = SafeGetString(worksheet.Cells[row, 3].Value),
                         DataResponse = SafeGetString(worksheet.Cells[row, 4].Value),
                         Output = SafeGetString(worksheet.Cells[row, 5].Value),
                         DataTypeMiddleWare = SafeGetString(worksheet.Cells[row, 6].Value),
-                        ByteSize = SafeGetInt(worksheet.Cells[row, 7].Value) ?? 0
+                        ByteSize = SafeGetString(worksheet.Cells[row, 7].Value)
                     };
 
                     testStages[stage.Value].OutputClients.Add(outputClient);
@@ -773,7 +773,7 @@ namespace UITestKit.Services
                         DataRequest = SafeGetString(worksheet.Cells[row, 4].Value),
                         Output = SafeGetString(worksheet.Cells[row, 5].Value),
                         DataTypeMiddleware = SafeGetString(worksheet.Cells[row, 6].Value),
-                        ByteSize = SafeGetInt(worksheet.Cells[row, 7].Value) ?? 0
+                        ByteSize = SafeGetString(worksheet.Cells[row, 7].Value)
                     };
 
                     testStages[stage.Value].OutputServers.Add(outputServer);

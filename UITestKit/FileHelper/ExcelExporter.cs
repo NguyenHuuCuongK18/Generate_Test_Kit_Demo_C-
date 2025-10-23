@@ -94,7 +94,7 @@ public class ExcelExporter
                     headerRange.Style.Font.Bold = true;
                 }
 
-                
+
                 // Thay thế LoadFromCollection bằng vòng lặp thủ công để đảm bảo hoạt động với ICollection<object>
                 if (data.Any())
                 {
@@ -125,7 +125,8 @@ public class ExcelExporter
                     {
                         column.Style.WrapText = true;
                         column.Width = MAX_COLUMN_WIDTH;
-                    }else if((propertyName.Equals("DataTypeMiddleWare", StringComparison.OrdinalIgnoreCase))||
+                    }
+                    else if ((propertyName.Equals("DataTypeMiddleWare", StringComparison.OrdinalIgnoreCase)) ||
                         (propertyName.Equals("DataRequest", StringComparison.OrdinalIgnoreCase)))
                     {
                         column.Style.WrapText = true;
@@ -201,5 +202,28 @@ public class ExcelExporter
 
         // Use existing method
         ExportToExcelParams(filePath, sheetsList.ToArray());
+    }
+
+    public void WriteColumnInExcel(string filePath, string content, int column, int row)
+    {
+        ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+
+        // Kiểm tra file tồn tại
+        if (!File.Exists(filePath))
+            throw new FileNotFoundException($"File không tồn tại tại đường dẫn: {filePath}");
+
+        var fileInfo = new FileInfo(filePath);
+
+        using (var package = new ExcelPackage(fileInfo))
+        {
+            // Tìm sheet "QuestionMark"
+            var worksheet = package.Workbook.Worksheets["QuestionMark"];
+
+            if (worksheet == null)
+                throw new InvalidOperationException("Sheet 'QuestionMark' không tồn tại trong file Excel.");
+
+            worksheet.Cells[$"A{row}"].Value = content;
+            package.Save();
+        }
     }
 }

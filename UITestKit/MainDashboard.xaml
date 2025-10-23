@@ -75,7 +75,7 @@
 
                     <!-- Action Buttons -->
                     <StackPanel Grid.Row="2" Margin="10">
-                        <Button x:Name="BtnNewTestKit" Content="+ New Test Kit" 
+                        <Button x:Name="BtnNewTestKit" Content="+ New Test Case" 
                                 Background="#27AE60" Foreground="White" 
                                 Padding="10,8" Margin="0,0,0,5" Click="BtnNewTestKit_Click"
                                 BorderThickness="0" Cursor="Hand" IsEnabled="False"/>
