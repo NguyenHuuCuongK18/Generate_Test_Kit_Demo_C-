@@ -1,12 +1,17 @@
-﻿using System.Collections.ObjectModel;
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using UITestKit.MiddlewareHandling;
 using UITestKit.Model;
 using UITestKit.Service;
 using UITestKit.ServiceExcute;
+using Application = System.Windows.Application;
 using MessageBox = System.Windows.MessageBox;
 
 namespace UITestKit
@@ -17,12 +22,10 @@ namespace UITestKit
         private readonly MiddlewareStart _middlewareStart = MiddlewareStart.Instance;
         private readonly HashSet<string> _ignoreTexts = new HashSet<string>();
 
-        // 🔑 REMOVED: private int _stepCounter = 0;
-        // Stage counter sẽ được tính động dựa trên StageKeys hiện có
-
         private int _selectedStageKey = -1;
         private TestStage _selectedStageData = new TestStage();
         private bool _isDisposed = false;
+        private bool _isReadOnly = false; // 🔑 NEW
 
         public Dictionary<int, TestStage> TestStages { get; } = new Dictionary<int, TestStage>();
         public ObservableCollection<int> StageKeys { get; } = new ObservableCollection<int>();
@@ -58,25 +61,32 @@ namespace UITestKit
             }
         }
 
-        public RecorderWindow(ExecutableManager manager, string path)
+        /// <summary>
+        /// 🔑 UPDATED: Constructor với read-only mode support
+        /// </summary>
+        public RecorderWindow(ExecutableManager manager, string path, bool isReadOnly = false)
         {
             InitializeComponent();
             DataContext = this;
 
             _manager = manager;
+            _isReadOnly = isReadOnly;
+
             InitializeIgnoreList();
 
-            // Subscribe events với named methods để có thể unsubscribe sau
-            _manager.ClientOutputReceived += OnClientOutputReceived;
-            _manager.ServerOutputReceived += OnServerOutputReceived;
-            _middlewareStart.Recorder = this;
+            if (!_isReadOnly)
+            {
+                // Normal mode: subscribe events và launch consoles
+                _manager.ClientOutputReceived += OnClientOutputReceived;
+                _manager.ServerOutputReceived += OnServerOutputReceived;
+                _middlewareStart.Recorder = this;
 
-            // Launch console windows
-            new ClientConsoleWindow { Recorder = this }.Show();
-            new ServerConsoleWindow { Recorder = this }.Show();
+                new ClientConsoleWindow { Recorder = this }.Show();
+                new ServerConsoleWindow { Recorder = this }.Show();
 
-            // Add initial stage and select it
-            AddActionStage("Connect");
+                AddActionStage("Connect");
+            }
+            // Read-only mode: không subscribe events, không launch consoles, không add initial stage
         }
 
         #region INotifyPropertyChanged
@@ -88,7 +98,7 @@ namespace UITestKit
         }
         #endregion
 
-        #region Event Handlers (Named methods để có thể unsubscribe)
+        #region Event Handlers
 
         private void OnClientOutputReceived(string data)
         {
@@ -139,15 +149,10 @@ namespace UITestKit
         #endregion
 
         #region Stage Management
-
-        /// <summary>
-        /// 🔑 FIXED: Tính stage number động dựa trên StageKeys hiện có
-        /// </summary>
         public void AddActionStage(string action, string input = "", string dataType = "")
         {
-            if (_isDisposed) return;
+            if (_isDisposed || _isReadOnly) return; // 🔑 Prevent adding in read-only mode
 
-            // 🔑 Tính next stage number dựa trên StageKeys hiện có
             int nextStageNumber = GetNextStageNumber();
 
             var testStage = new TestStage();
@@ -170,19 +175,13 @@ namespace UITestKit
             System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Added Stage {nextStageNumber} - Action: {action}");
         }
 
-        /// <summary>
-        /// 🔑 NEW METHOD: Tính next stage number
-        /// Nếu có stage bị xóa ở giữa, sẽ fill vào gap đó
-        /// </summary>
         private int GetNextStageNumber()
         {
-            // Nếu chưa có stage nào, return 1
             if (!StageKeys.Any())
             {
                 return 1;
             }
 
-            // Tìm gap (khoảng trống) trong stage numbering
             var sortedKeys = StageKeys.OrderBy(k => k).ToList();
 
             for (int i = 0; i < sortedKeys.Count; i++)
@@ -190,7 +189,6 @@ namespace UITestKit
                 int expectedStage = i + 1;
                 int actualStage = sortedKeys[i];
 
-                // Nếu tìm thấy gap, return số đó
                 if (actualStage != expectedStage)
                 {
                     System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Found gap at stage {expectedStage}");
@@ -198,18 +196,16 @@ namespace UITestKit
                 }
             }
 
-            // Nếu không có gap, return max + 1
             int nextStage = sortedKeys.Max() + 1;
             System.Diagnostics.Debug.WriteLine($"[RecorderWindow] No gap found, next stage: {nextStage}");
             return nextStage;
         }
-
         #endregion
 
         #region HandleProcessOutput
         private void HandleProcessOutput(bool isClient, string data)
         {
-            if (_isDisposed) return;
+            if (_isDisposed || _isReadOnly) return; // 🔑 Prevent handling output in read-only mode
             if (!TestStages.Any()) return;
             if (ShouldIgnore(data)) return;
 
@@ -280,18 +276,9 @@ namespace UITestKit
 
         #region Button Click Handlers
 
-        /// <summary>
-        /// 🔑 ENHANCED: Xóa stage và tất cả data liên quan
-        /// Stage numbering sẽ được reuse cho stage mới
-        /// </summary>
         private void BtnDeleteStage_Click(object sender, RoutedEventArgs e)
         {
-            if (_isDisposed)
-            {
-                MessageBox.Show("Cannot delete stage - RecorderWindow is disposed", "Error",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
+            if (_isDisposed || _isReadOnly) return; // 🔑 Prevent deletion in read-only mode
 
             if (SelectedStageKey <= 0 || !TestStages.ContainsKey(SelectedStageKey))
             {
@@ -300,7 +287,6 @@ namespace UITestKit
                 return;
             }
 
-            // Không cho phép xóa nếu chỉ còn 1 stage
             if (TestStages.Count <= 1)
             {
                 MessageBox.Show("Cannot delete the last stage. At least one stage must remain.", "Delete Not Allowed",
@@ -313,7 +299,6 @@ namespace UITestKit
                 int stageToDelete = SelectedStageKey;
                 var stageData = TestStages[stageToDelete];
 
-                // 🔑 Hiển thị thông tin stage sẽ bị xóa
                 int inputCount = stageData.InputClients.Count;
                 int outputClientCount = stageData.OutputClients.Count;
                 int outputServerCount = stageData.OutputServers.Count;
@@ -324,7 +309,7 @@ namespace UITestKit
                     $"• {inputCount} Input Client(s)\n" +
                     $"• {outputClientCount} Output Client(s)\n" +
                     $"• {outputServerCount} Output Server(s)\n\n" +
-                    $"Stage {stageToDelete} will become available for new stages.",
+                    $"This action cannot be undone.",
                     "Confirm Delete Stage",
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Warning);
@@ -332,14 +317,7 @@ namespace UITestKit
                 if (result == MessageBoxResult.Yes)
                 {
                     TestStages.Remove(stageToDelete);
-
                     StageKeys.Remove(stageToDelete);
-
-                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Deleted Stage {stageToDelete}");
-                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] - Deleted {inputCount} InputClients");
-                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] - Deleted {outputClientCount} OutputClients");
-                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] - Deleted {outputServerCount} OutputServers");
-                    System.Diagnostics.Debug.WriteLine($"[RecorderWindow] - Stage {stageToDelete} will be reused for next new stage");
 
                     if (StageKeys.Count > 0)
                     {
@@ -363,7 +341,6 @@ namespace UITestKit
                         SelectedStageKey = -1;
                     }
 
-                    // 🔑 STEP 5: Notify UI update
                     OnPropertyChanged(nameof(TestStages));
                     OnPropertyChanged(nameof(StageKeys));
                     OnPropertyChanged(nameof(SelectedStageData));
@@ -371,8 +348,7 @@ namespace UITestKit
 
                     MessageBox.Show(
                         $"Stage {stageToDelete} deleted successfully.\n\n" +
-                        $"Remaining stages: {StageKeys.Count}\n" +
-                        $"Next new stage will be: {GetNextStageNumber()}",
+                        $"Remaining stages: {StageKeys.Count}",
                         "Stage Deleted",
                         MessageBoxButton.OK,
                         MessageBoxImage.Information);
@@ -385,8 +361,6 @@ namespace UITestKit
                     "Delete Error",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
-
-                System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Delete stage error: {ex}");
             }
         }
 
@@ -403,11 +377,6 @@ namespace UITestKit
 
         #region Cleanup & Dispose
 
-        /// <summary>
-        /// 🔑 FIXED: Cleanup KHÔNG clear data
-        /// Chỉ unsubscribe events và clear middleware reference
-        /// GIỮ NGUYÊN TestStages và StageKeys để có thể xem lại
-        /// </summary>
         public void Cleanup()
         {
             if (_isDisposed) return;
@@ -416,14 +385,15 @@ namespace UITestKit
 
             try
             {
-                // Unsubscribe events từ ExecutableManager
-                _manager.ClientOutputReceived -= OnClientOutputReceived;
-                _manager.ServerOutputReceived -= OnServerOutputReceived;
-
-                // Clear middleware reference
-                if (_middlewareStart.Recorder == this)
+                if (!_isReadOnly)
                 {
-                    _middlewareStart.Recorder = null;
+                    _manager.ClientOutputReceived -= OnClientOutputReceived;
+                    _manager.ServerOutputReceived -= OnServerOutputReceived;
+
+                    if (_middlewareStart.Recorder == this)
+                    {
+                        _middlewareStart.Recorder = null;
+                    }
                 }
 
                 System.Diagnostics.Debug.WriteLine($"[RecorderWindow] Cleanup completed - events unsubscribed, data preserved");

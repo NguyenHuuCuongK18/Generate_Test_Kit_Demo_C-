@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -26,17 +27,17 @@ namespace UITestKit
             InitializeComponent();
             InitializeFolderManager();
             LoadFolderStructure();
+
+            // 🔑 Subscribe to TreeView selection
+            FolderTreeView.SelectedItemChanged += FolderTreeView_SelectedItemChanged;
+
             LogMessage("🚀 Application started. Please configure settings first.");
         }
 
-        /// <summary>
-        /// 🔑 FIXED: Simplified event handler to avoid deadlock
-        /// </summary>
         private void InitializeFolderManager()
         {
             _folderManager.OnFolderStructureChanged += (message) =>
             {
-                // Simple logging only, no TreeView refresh during event
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     LogMessage($"📁 {message}");
@@ -63,8 +64,132 @@ namespace UITestKit
         }
 
         /// <summary>
-        /// 🔑 FIXED: Added detailed logging for debugging
+        /// 🔑 NEW: Handle TreeView item selection
         /// </summary>
+        private void FolderTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+        {
+            if (e.NewValue is TreeViewItem selectedItem && selectedItem.Tag is string path)
+            {
+                if (File.Exists(path) && Path.GetFileName(path).Equals("Detail.xlsx", StringComparison.OrdinalIgnoreCase))
+                {
+                    LogMessage($"📂 Selected Detail.xlsx: {path}");
+                    LoadDetailFileReadOnly(path);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 🔑 NEW: Load Detail.xlsx in read-only mode
+        /// </summary>
+        private void LoadDetailFileReadOnly(string detailFilePath)
+        {
+            try
+            {
+                string testKitFolderPath = Path.GetDirectoryName(detailFilePath);
+                string testKitName = Path.GetFileName(testKitFolderPath);
+
+                LogMessage($"📖 Loading test data from: {testKitName}");
+
+                var testStages = _folderManager.LoadTestDataFromDetailFile(detailFilePath);
+
+                if (testStages == null || testStages.Count == 0)
+                {
+                    MessageBox.Show(
+                        "No test data found in Detail.xlsx",
+                        "Empty File",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
+
+                var existingTab = _activeTabs.Values.FirstOrDefault(t =>
+                    t.FolderPath.Equals(testKitFolderPath, StringComparison.OrdinalIgnoreCase));
+
+                if (existingTab != null)
+                {
+                    ActivateTab(existingTab.TabId);
+
+                    MessageBox.Show(
+                        $"TestKit '{testKitName}' is already open.\n\nSwitched to existing tab.",
+                        "Already Open",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
+
+                string tabId = Guid.NewGuid().ToString();
+                CreateReadOnlyRecorderTab(tabId, $"{testKitName} (Read-Only)", testKitFolderPath, testStages);
+
+                LogMessage($"✅ Loaded test data: {testStages.Count} stages");
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ ERROR loading Detail.xlsx: {ex.Message}");
+                MessageBox.Show(
+                    $"Failed to load Detail.xlsx:\n\n{ex.Message}",
+                    "Load Error",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        /// <summary>
+        /// 🔑 NEW: Create read-only RecorderWindow tab
+        /// </summary>
+        private void CreateReadOnlyRecorderTab(string tabId, string tabName, string testKitFolderPath, Dictionary<int, TestStage> testStages)
+        {
+            Button tabButton = new Button
+            {
+                Content = CreateTabHeader(tabName, tabId, isReadOnly: true),
+                Tag = tabId,
+                Height = 40,
+                MinWidth = 150,
+                Background = new SolidColorBrush(Color.FromRgb(236, 240, 241)),
+                Foreground = Brushes.Black,
+                BorderThickness = new Thickness(0, 0, 1, 0),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(189, 195, 199)),
+                Cursor = System.Windows.Input.Cursors.Hand
+            };
+
+            tabButton.Click += TabButton_Click;
+            TabHeaderPanel.Children.Add(tabButton);
+
+            var testKitConfig = new ConfigModel
+            {
+                ClientPath = _config?.ClientPath ?? "",
+                ServerPath = _config?.ServerPath ?? "",
+                SaveLocation = testKitFolderPath,
+                ProjectName = _config?.ProjectName ?? "Unknown",
+                Protocol = _config?.Protocol ?? "TCP",
+                ClientAppSettings = _config?.ClientAppSettings,
+                ServerAppSettings = _config?.ServerAppSettings
+            };
+
+            var recorderContent = new RecorderWindowContent(tabId, testKitConfig, this, isReadOnly: true);
+
+            recorderContent.LoadTestStages(testStages);
+
+            recorderContent.OnTestKitClosed += (tid) => OnTestKitClosed(tid);
+            recorderContent.Visibility = Visibility.Collapsed;
+
+            TabContentArea.Children.Add(recorderContent);
+
+            var tab = new RecorderWindowTab
+            {
+                TabId = tabId,
+                TabName = tabName,
+                HeaderButton = tabButton,
+                Content = recorderContent,
+                IsRunning = false,
+                FolderPath = testKitFolderPath
+            };
+
+            _activeTabs[tabId] = tab;
+
+            ActivateTab(tabId);
+            PlaceholderPanel.Visibility = Visibility.Collapsed;
+        }
+
         private void BtnConfigure_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -73,7 +198,6 @@ namespace UITestKit
 
                 if (HasRunningTestKit())
                 {
-                    LogMessage("⚙️ [2/10] Has running TestKit - showing warning");
                     MessageBox.Show(
                         "Cannot reconfigure while Test Kits are running.\n\nPlease close all Test Kits first.",
                         "Configuration Locked",
@@ -82,40 +206,59 @@ namespace UITestKit
                     return;
                 }
 
+                LogMessage("⚙️ [2/10] No running TestKits");
+                LogMessage("⚙️ [3/10] Opening configuration window...");
+
                 var configWindow = new MainWindow();
                 configWindow.Owner = this;
 
+                LogMessage("⚙️ [4/10] Showing dialog...");
 
                 bool? dialogResult = configWindow.ShowDialog();
 
+                LogMessage($"⚙️ [5/10] Dialog closed - Result: {dialogResult}");
 
                 if (dialogResult == true && configWindow.SavedConfig != null)
                 {
+                    LogMessage("⚙️ [6/10] Config saved successfully");
 
                     _config = configWindow.SavedConfig;
                     _isConfigured = true;
+
+                    LogMessage($"⚙️ [7/10] Initializing FolderManager...");
+                    LogMessage($"   SaveLocation: {_config.SaveLocation}");
+                    LogMessage($"   ProjectName: {_config.ProjectName}");
 
                     string rootFolder = null;
                     try
                     {
                         rootFolder = _folderManager.Initialize(_config.SaveLocation, _config.ProjectName);
-                        _folderManager.CreateProjectHeaderFile(_config.Protocol);
+                        LogMessage($"⚙️ [8/10] FolderManager initialized: {rootFolder}");
                     }
                     catch (Exception initEx)
                     {
+                        LogMessage($"❌ [8/10] FolderManager.Initialize FAILED");
                         LogMessage($"   Error: {initEx.Message}");
                         throw;
                     }
 
+                    LogMessage("⚙️ [8.5/10] Creating project Header.xlsx...");
+                    _folderManager.CreateProjectHeaderFile(_config.Protocol);
+                    LogMessage("⚙️ [8.6/10] Project Header.xlsx created");
+
+                    LogMessage("⚙️ [9/10] Building TreeView...");
                     try
                     {
                         _folderManager.BuildTreeView(FolderTreeView);
+                        LogMessage("⚙️ [9.5/10] TreeView built successfully");
                     }
                     catch (Exception treeEx)
                     {
+                        LogMessage($"⚠️ [9.5/10] TreeView build failed (non-critical): {treeEx.Message}");
                     }
 
-                    // Update UI
+                    LogMessage("⚙️ [10/10] Updating UI...");
+
                     TxtConfigStatus.Text = "✅ Configured";
                     TxtConfigStatus.Foreground = new SolidColorBrush(Color.FromRgb(39, 174, 96));
                     TxtProtocol.Text = _config.Protocol;
@@ -147,12 +290,6 @@ namespace UITestKit
                 LogMessage($"❌ CRITICAL ERROR in BtnConfigure_Click");
                 LogMessage($"   Type: {ex.GetType().Name}");
                 LogMessage($"   Message: {ex.Message}");
-                LogMessage($"   StackTrace: {ex.StackTrace}");
-
-                if (ex.InnerException != null)
-                {
-                    LogMessage($"   InnerException: {ex.InnerException.Message}");
-                }
 
                 MessageBox.Show(
                     $"Configuration failed:\n\n{ex.Message}\n\nCheck log for details.",
@@ -211,12 +348,11 @@ namespace UITestKit
 
                 try
                 {
-                    string testKitFolderPath = _folderManager.CreateTestKitFolder(testKitName, true);
+                    string testKitFolderPath = _folderManager.CreateTestKitFolder(testKitName, createExcelTemplates: true);
 
                     string tabId = Guid.NewGuid().ToString();
                     CreateNewRecorderTab(tabId, testKitName, testKitFolderPath);
 
-                    // Refresh TreeView after creating TestKit
                     _folderManager.RefreshTreeView(FolderTreeView);
 
                     LogMessage($"🆕 Created new Test Kit: {testKitName}");
@@ -284,13 +420,13 @@ namespace UITestKit
             PlaceholderPanel.Visibility = Visibility.Collapsed;
         }
 
-        private StackPanel CreateTabHeader(string tabName, string tabId)
+        private StackPanel CreateTabHeader(string tabName, string tabId, bool isReadOnly = false)
         {
             var panel = new StackPanel { Orientation = Orientation.Horizontal };
 
             var indicator = new TextBlock
             {
-                Text = "🔴",
+                Text = isReadOnly ? "📖" : "🔴",
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(5, 0, 5, 0),
                 FontSize = 10,
@@ -301,7 +437,8 @@ namespace UITestKit
             {
                 Text = tabName,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 10, 0)
+                Margin = new Thickness(0, 0, 10, 0),
+                FontStyle = isReadOnly ? FontStyles.Italic : FontStyles.Normal
             };
 
             var closeButton = new Button
@@ -391,7 +528,10 @@ namespace UITestKit
                     {
                         LogMessage($"⏹ Closing: {tab.TabName}...");
 
-                        await tab.Content.StopAllProcessesAsync();
+                        if (tab.IsRunning)
+                        {
+                            await tab.Content.StopAllProcessesAsync();
+                        }
 
                         TabHeaderPanel.Children.Remove(tab.HeaderButton);
                         TabContentArea.Children.Remove(tab.Content);
@@ -399,7 +539,6 @@ namespace UITestKit
 
                         LogMessage($"✅ Closed: {tab.TabName}");
 
-                        // Refresh TreeView
                         _folderManager.RefreshTreeView(FolderTreeView);
 
                         if (_activeTabs.Count > 0)
@@ -436,7 +575,6 @@ namespace UITestKit
 
                 LogMessage($"[{_activeTabs[tabId].TabName}] Stopped");
 
-                // Refresh TreeView to show exported files
                 _folderManager.RefreshTreeView(FolderTreeView);
             }
         }
@@ -453,7 +591,6 @@ namespace UITestKit
 
         private void OnRecorderDataChanged(string tabId, object data)
         {
-            // Handle data changed
         }
 
         private void BtnOpenFolder_Click(object sender, RoutedEventArgs e)

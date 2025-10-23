@@ -25,16 +25,65 @@ namespace UITestKit
         private bool _isRunning = false;
         private bool _isMiddlewareOwner = false;
         private bool _isDisposed = false;
-        private bool _hasUnsavedChanges = false; // 🔑 Track unsaved changes
+        private bool _hasUnsavedChanges = false;
+        private bool _isReadOnly = false; // 🔑 NEW
+        private string _lastExportPath = "";
 
-        public RecorderWindowContent(string tabId, ConfigModel config, MainDashboard dashboard)
+        /// <summary>
+        /// 🔑 UPDATED: Constructor với read-only mode support
+        /// </summary>
+        public RecorderWindowContent(string tabId, ConfigModel config, MainDashboard dashboard, bool isReadOnly = false)
         {
             InitializeComponent();
             TabId = tabId;
             _config = config;
             _dashboard = dashboard;
+            _isReadOnly = isReadOnly;
 
-            InitializeRecorder();
+            if (_isReadOnly)
+            {
+                InitializeReadOnlyMode();
+            }
+            else
+            {
+                InitializeRecorder();
+            }
+        }
+
+        /// <summary>
+        /// 🔑 NEW: Initialize in read-only mode (no processes started)
+        /// </summary>
+        private void InitializeReadOnlyMode()
+        {
+            try
+            {
+                StatusText.Text = "📖 Read-Only Mode";
+                StatusText.Foreground = new SolidColorBrush(Color.FromRgb(52, 152, 219));
+
+                _dashboard?.LogMessage($"[{TabId}] Initializing in read-only mode...");
+
+                // Create RecorderWindow without starting processes
+                _recorderWindow = new RecorderWindow(_manager, _config.SaveLocation);
+
+                // Embed content
+                EmbedRecorderWindowContent();
+
+                // Disable all edit buttons
+                DisableAllEditButtons();
+
+                _isDisposed = false;
+                _isRunning = false;
+
+                _dashboard?.LogMessage($"[{TabId}] ✅ Read-only mode initialized");
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"❌ Error: {ex.Message}";
+                StatusText.Foreground = new SolidColorBrush(Color.FromRgb(231, 76, 60));
+                _dashboard?.LogMessage($"[{TabId}] ❌ ERROR: {ex.Message}");
+                MessageBox.Show($"Failed to initialize read-only mode:\n{ex.Message}", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private async void InitializeRecorder()
@@ -44,30 +93,24 @@ namespace UITestKit
                 StatusText.Text = "Initializing Test Kit...";
                 _dashboard?.LogMessage($"[{TabId}] Initializing Test Kit...");
 
-                // Khởi tạo ExecutableManager
                 _manager.Init(_config.ClientPath, _config.ServerPath);
 
-                // Tạo RecorderWindow instance
                 _recorderWindow = new RecorderWindow(_manager, _config.SaveLocation);
 
-                // IMPORTANT: Set Recorder cho Middleware trước khi embed content
                 _middlewareStart.Recorder = _recorderWindow;
 
-                // Subscribe to events từ ExecutableManager (RecorderWindowContent layer)
                 _manager.ClientOutputReceived += OnClientOutput;
                 _manager.ServerOutputReceived += OnServerOutput;
 
-                // Embed RecorderWindow content VÀ giữ DataContext
                 EmbedRecorderWindowContent();
 
-                // Start processes
                 await StartProcessesAsync();
 
                 StatusText.Text = "✅ Test Kit Running";
                 StatusText.Foreground = new SolidColorBrush(Color.FromRgb(39, 174, 96));
 
                 _isRunning = true;
-                _hasUnsavedChanges = false; // 🔑 Reset flag khi khởi tạo
+                _hasUnsavedChanges = false;
                 _dashboard?.LogMessage($"[{TabId}] ✅ Test Kit started successfully");
             }
             catch (Exception ex)
@@ -81,26 +124,18 @@ namespace UITestKit
             }
         }
 
-        /// <summary>
-        /// Embed RecorderWindow content và giữ nguyên DataContext để binding hoạt động
-        /// </summary>
         private void EmbedRecorderWindowContent()
         {
             try
             {
                 if (_recorderWindow.Content is DockPanel recorderContent)
                 {
-                    // Remove content from RecorderWindow
                     _recorderWindow.Content = null;
 
-                    // Clear container (remove placeholder)
                     RecorderContentArea.Children.Clear();
 
-                    // CRITICAL: Set DataContext của embedded content = RecorderWindow
-                    // Điều này đảm bảo tất cả bindings vẫn hoạt động
                     recorderContent.DataContext = _recorderWindow;
 
-                    // Add to container
                     RecorderContentArea.Children.Add(recorderContent);
 
                     _dashboard?.LogMessage($"[{TabId}] RecorderWindow content embedded with DataContext preserved");
@@ -117,14 +152,12 @@ namespace UITestKit
             }
         }
 
-        #region Event Handlers (RecorderWindowContent layer)
+        #region Event Handlers
 
         private void OnClientOutput(string data)
         {
             if (_isDisposed) return;
             _dashboard?.LogMessage($"[{TabId}] 📤 Client: {data}");
-
-            // 🔑 Mark as having unsaved changes khi có output mới
             _hasUnsavedChanges = true;
         }
 
@@ -132,8 +165,6 @@ namespace UITestKit
         {
             if (_isDisposed) return;
             _dashboard?.LogMessage($"[{TabId}] 📥 Server: {data}");
-
-            // 🔑 Mark as having unsaved changes khi có output mới
             _hasUnsavedChanges = true;
         }
 
@@ -143,12 +174,10 @@ namespace UITestKit
         {
             try
             {
-                // 1. Start Server
                 _dashboard?.LogMessage($"[{TabId}] Starting Server...");
                 _manager.StartServer();
                 await Task.Delay(1000);
 
-                // 2. Start Middleware (chỉ nếu chưa chạy)
                 if (!IsMiddlewareRunning())
                 {
                     _dashboard?.LogMessage($"[{TabId}] Starting Middleware ({_config.Protocol})...");
@@ -163,7 +192,6 @@ namespace UITestKit
                     _middlewareStart.Recorder = _recorderWindow;
                 }
 
-                // 3. Start Client
                 _dashboard?.LogMessage($"[{TabId}] Starting Client...");
                 _manager.StartClient();
                 await Task.Delay(500);
@@ -190,13 +218,10 @@ namespace UITestKit
             return false;
         }
 
-        /// <summary>
-        /// 🔑 MAIN CLEANUP METHOD - Stop và cleanup tất cả resources
-        /// KHÔNG disable UI, chỉ disable các button chỉnh sửa
-        /// Data được preserve để có thể xem lại và select
-        /// </summary>
         public async Task StopAllProcessesAsync()
         {
+            if (_isReadOnly) return; // Read-only mode doesn't have processes to stop
+
             if (!_isRunning || _isDisposed) return;
 
             try
@@ -204,32 +229,17 @@ namespace UITestKit
                 _dashboard?.LogMessage($"[{TabId}] ========================================");
                 _dashboard?.LogMessage($"[{TabId}] Starting cleanup process...");
 
-                // 🔑 STEP 1: Cleanup RecorderWindow TRƯỚC để unsubscribe events
-                // NHƯNG KHÔNG CLEAR DATA
                 if (_recorderWindow != null)
                 {
                     _dashboard?.LogMessage($"[{TabId}] Cleaning up RecorderWindow (preserving data)...");
-
-                    // 🔑 Log data trước khi cleanup
-                    _dashboard?.LogMessage($"[{TabId}] TestStages count BEFORE cleanup: {_recorderWindow.TestStages.Count}");
-                    _dashboard?.LogMessage($"[{TabId}] StageKeys count BEFORE cleanup: {_recorderWindow.StageKeys.Count}");
-
                     _recorderWindow.Cleanup();
-
-                    // 🔑 Log data sau khi cleanup
-                    _dashboard?.LogMessage($"[{TabId}] TestStages count AFTER cleanup: {_recorderWindow.TestStages.Count}");
-                    _dashboard?.LogMessage($"[{TabId}] StageKeys count AFTER cleanup: {_recorderWindow.StageKeys.Count}");
-
-                    _dashboard?.LogMessage($"[{TabId}] ✅ RecorderWindow cleanup completed (data preserved)");
+                    _dashboard?.LogMessage($"[{TabId}] ✅ RecorderWindow cleanup completed");
                 }
 
-                // 🔑 STEP 2: Close Console Windows
                 CloseConsoleWindows();
 
-                // 🔑 STEP 3: Disable ONLY edit buttons (không disable ComboBox và DataGrid)
                 DisableEditButtonsOnly();
 
-                // 🔑 STEP 4: Unsubscribe RecorderWindowContent events
                 if (_manager != null)
                 {
                     _dashboard?.LogMessage($"[{TabId}] Unsubscribing RecorderWindowContent events...");
@@ -238,7 +248,6 @@ namespace UITestKit
                     _dashboard?.LogMessage($"[{TabId}] ✅ RecorderWindowContent events unsubscribed");
                 }
 
-                // 🔑 STEP 5: Stop Client & Server processes
                 if (_manager != null)
                 {
                     _dashboard?.LogMessage($"[{TabId}] Stopping Client and Server processes...");
@@ -246,7 +255,6 @@ namespace UITestKit
                     _dashboard?.LogMessage($"[{TabId}] ✅ Client and Server stopped");
                 }
 
-                // 🔑 STEP 6: Stop Middleware nếu TestKit này là owner
                 if (_isMiddlewareOwner && _middlewareStart != null)
                 {
                     _dashboard?.LogMessage($"[{TabId}] Stopping Middleware (owner)...");
@@ -258,7 +266,6 @@ namespace UITestKit
                 {
                     _dashboard?.LogMessage($"[{TabId}] ⚠️ Keeping Middleware running (not owner)");
 
-                    // Clear recorder reference để không nhận data nữa
                     if (_middlewareStart.Recorder == _recorderWindow)
                     {
                         _middlewareStart.Recorder = null;
@@ -266,51 +273,41 @@ namespace UITestKit
                     }
                 }
 
-                // 🔑 STEP 7: Mark as disposed
                 _isDisposed = true;
                 _isRunning = false;
 
-                // 🔑 STEP 8: Force refresh bindings để đảm bảo ComboBox hoạt động
                 Dispatcher.Invoke(() =>
                 {
                     RefreshBindings();
                     _dashboard?.LogMessage($"[{TabId}] ✅ Bindings refreshed");
                 });
 
-                // Update UI
                 StatusText.Text = "⏹ Stopped";
                 StatusText.Foreground = new SolidColorBrush(Color.FromRgb(149, 165, 166));
 
                 _dashboard?.LogMessage($"[{TabId}] ✅ All processes stopped, data and UI preserved");
                 _dashboard?.LogMessage($"[{TabId}] ========================================");
 
-                // Notify dashboard
                 OnTestKitClosed?.Invoke(TabId);
             }
             catch (Exception ex)
             {
                 _dashboard?.LogMessage($"[{TabId}] ❌ ERROR during cleanup: {ex.Message}");
-                _dashboard?.LogMessage($"[{TabId}] StackTrace: {ex.StackTrace}");
                 throw;
             }
         }
 
-        /// <summary>
-        /// 🔑 NEW METHOD: Close console windows của TestKit này
-        /// </summary>
         private void CloseConsoleWindows()
         {
             try
             {
                 _dashboard?.LogMessage($"[{TabId}] Closing console windows...");
 
-                // Lấy tất cả windows trong application
                 var windowsToClose = System.Windows.Application.Current.Windows
                     .Cast<Window>()
                     .Where(w => w is ClientConsoleWindow || w is ServerConsoleWindow)
                     .Where(w =>
                     {
-                        // Check nếu window này thuộc về RecorderWindow hiện tại
                         if (w is ClientConsoleWindow clientConsole)
                         {
                             return clientConsole.Recorder == _recorderWindow;
@@ -330,7 +327,6 @@ namespace UITestKit
                     {
                         window.Close();
                         closedCount++;
-                        _dashboard?.LogMessage($"[{TabId}] Closed console window: {window.GetType().Name}");
                     }
                     catch (Exception ex)
                     {
@@ -347,10 +343,48 @@ namespace UITestKit
         }
 
         /// <summary>
-        /// 🔑 FIXED: Chỉ disable các button chỉnh sửa
-        /// KHÔNG disable ComboBox và DataGrid
-        /// KHÔNG có banner overlay
+        /// 🔑 NEW: Disable all buttons in read-only mode
         /// </summary>
+        private void DisableAllEditButtons()
+        {
+            try
+            {
+                if (BtnStartRecord != null)
+                {
+                    BtnStartRecord.IsEnabled = false;
+                    BtnStartRecord.Opacity = 0.3;
+                }
+
+                if (BtnStopRecord != null)
+                {
+                    BtnStopRecord.IsEnabled = false;
+                    BtnStopRecord.Opacity = 0.3;
+                }
+
+                if (BtnSave != null)
+                {
+                    BtnSave.IsEnabled = false;
+                    BtnSave.Opacity = 0.3;
+                }
+
+                if (RecorderContentArea != null && RecorderContentArea.Children.Count > 0)
+                {
+                    var content = RecorderContentArea.Children[0] as DockPanel;
+                    if (content != null)
+                    {
+                        DisableSpecificButtons(content);
+                        SetDataGridsReadOnly(content);
+                    }
+                }
+
+                _dashboard?.LogMessage($"[{TabId}] ✅ All edit buttons disabled (read-only mode)");
+            }
+            catch (Exception ex)
+            {
+                _dashboard?.LogMessage($"[{TabId}] ⚠️ Warning: Could not disable edit buttons - {ex.Message}");
+            }
+        }
+
         private void DisableEditButtonsOnly()
         {
             try
@@ -362,32 +396,17 @@ namespace UITestKit
                     var content = RecorderContentArea.Children[0] as DockPanel;
                     if (content != null)
                     {
-                        // 🔑 DEBUG: Log TestStages count
-                        _dashboard?.LogMessage($"[{TabId}] TestStages count: {_recorderWindow.TestStages.Count}");
-                        _dashboard?.LogMessage($"[{TabId}] StageKeys count: {_recorderWindow.StageKeys.Count}");
-
-                        // Log stage keys
-                        if (_recorderWindow.StageKeys.Count > 0)
-                        {
-                            var keys = string.Join(", ", _recorderWindow.StageKeys);
-                            _dashboard?.LogMessage($"[{TabId}] StageKeys: {keys}");
-                        }
-
-                        // Tìm và disable CÁC BUTTON CHỈNH SỬA
                         DisableSpecificButtons(content);
-
-                        // 🔑 Set DataGrid thành ReadOnly (nhưng vẫn có thể select)
                         SetDataGridsReadOnly(content);
-
-                        // 🔑 DEBUG: Check ComboBox state
-                        var comboBoxes = FindVisualChildren<ComboBox>(content);
-                        foreach (var cb in comboBoxes)
-                        {
-                            _dashboard?.LogMessage($"[{TabId}] ComboBox - IsEnabled: {cb.IsEnabled}, ItemsSource count: {cb.Items.Count}");
-                        }
 
                         _dashboard?.LogMessage($"[{TabId}] ✅ Edit buttons disabled, ComboBox and data preserved");
                     }
+                }
+
+                if (BtnStartRecord != null)
+                {
+                    BtnStartRecord.IsEnabled = false;
+                    BtnStartRecord.Opacity = 0.5;
                 }
 
                 if (BtnStopRecord != null)
@@ -398,7 +417,6 @@ namespace UITestKit
 
                 if (BtnSave != null)
                 {
-                    // Keep Save button enabled
                     BtnSave.Content = "💾 Export Data";
                 }
 
@@ -410,9 +428,6 @@ namespace UITestKit
             }
         }
 
-        /// <summary>
-        /// Disable các button chỉnh sửa cụ thể
-        /// </summary>
         private void DisableSpecificButtons(DockPanel content)
         {
             try
@@ -423,7 +438,6 @@ namespace UITestKit
                 {
                     string buttonContent = button.Content?.ToString() ?? "";
 
-                    // Chỉ disable: Add Stage, Update Stage, Delete Stage, Submit, Close All
                     if (buttonContent.Contains("Add Stage") ||
                         buttonContent.Contains("Update Stage") ||
                         buttonContent.Contains("Delete Stage") ||
@@ -432,8 +446,6 @@ namespace UITestKit
                     {
                         button.IsEnabled = false;
                         button.Opacity = 0.5;
-
-                        _dashboard?.LogMessage($"[{TabId}] Disabled button: {buttonContent}");
                     }
                 }
             }
@@ -443,9 +455,6 @@ namespace UITestKit
             }
         }
 
-        /// <summary>
-        /// Set DataGrids thành ReadOnly nhưng vẫn có thể select
-        /// </summary>
         private void SetDataGridsReadOnly(DockPanel content)
         {
             try
@@ -456,8 +465,6 @@ namespace UITestKit
                     dataGrid.IsReadOnly = true;
                     dataGrid.CanUserAddRows = false;
                     dataGrid.CanUserDeleteRows = false;
-
-                    _dashboard?.LogMessage($"[{TabId}] Set DataGrid to read-only (selection enabled)");
                 }
             }
             catch (Exception ex)
@@ -466,9 +473,6 @@ namespace UITestKit
             }
         }
 
-        /// <summary>
-        /// Helper method để tìm tất cả children của một type trong visual tree
-        /// </summary>
         private static IEnumerable<T> FindVisualChildren<T>(DependencyObject depObj) where T : DependencyObject
         {
             if (depObj == null) yield break;
@@ -490,11 +494,95 @@ namespace UITestKit
         }
 
         /// <summary>
-        /// 🔑 ENHANCED: Stop với cảnh báo save trước
+        /// 🔑 NEW: Load test stages from Dictionary (for read-only mode)
         /// </summary>
+        public void LoadTestStages(Dictionary<int, TestStage> testStages)
+        {
+            if (_recorderWindow == null) return;
+
+            try
+            {
+                _dashboard?.LogMessage($"[{TabId}] Loading {testStages.Count} stages...");
+
+                _recorderWindow.TestStages.Clear();
+                _recorderWindow.StageKeys.Clear();
+
+                foreach (var stageKvp in testStages.OrderBy(s => s.Key))
+                {
+                    _recorderWindow.TestStages[stageKvp.Key] = stageKvp.Value;
+                    _recorderWindow.StageKeys.Add(stageKvp.Key);
+                }
+
+                if (_recorderWindow.StageKeys.Count > 0)
+                {
+                    _recorderWindow.SelectedStageKey = _recorderWindow.StageKeys[0];
+                }
+
+                // Force UI refresh
+                RefreshBindings();
+
+                _dashboard?.LogMessage($"[{TabId}] ✅ Loaded {testStages.Count} stages");
+            }
+            catch (Exception ex)
+            {
+                _dashboard?.LogMessage($"[{TabId}] ❌ Error loading stages: {ex.Message}");
+            }
+        }
+
+        private void BtnStartRecord_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isReadOnly)
+            {
+                MessageBox.Show(
+                    "Cannot record in read-only mode.\n\nThis TestKit was loaded from a file.",
+                    "Read-Only Mode",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            if (_isDisposed)
+            {
+                MessageBox.Show(
+                    "Test Kit has been stopped.\n\nPlease create a new Test Kit to record new data.",
+                    "Test Kit Stopped",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            if (!_isRunning)
+            {
+                MessageBox.Show("Test Kit is not running!", "Error",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            if (_recorderWindow != null)
+            {
+                string action = Microsoft.VisualBasic.Interaction.InputBox(
+                    "Enter action name for new stage:",
+                    "New Stage",
+                    "New Action");
+
+                if (!string.IsNullOrWhiteSpace(action))
+                {
+                    _recorderWindow.AddActionStage(action);
+                    _dashboard?.LogMessage($"[{TabId}] ▶ Started new stage: {action}");
+
+                    StatusText.Text = $"▶ Recording: {action}";
+                    StatusText.Foreground = new SolidColorBrush(Color.FromRgb(231, 76, 60));
+
+                    _hasUnsavedChanges = true;
+
+                    OnDataChanged?.Invoke(new { Action = "StartRecord", TabId = this.TabId, StageName = action });
+                }
+            }
+        }
+
         private async void BtnStopRecord_Click(object sender, RoutedEventArgs e)
         {
-            if (_isDisposed) return;
+            if (_isReadOnly || _isDisposed) return;
 
             if (_hasUnsavedChanges)
             {
@@ -516,14 +604,10 @@ namespace UITestKit
 
                 if (saveWarning == MessageBoxResult.Yes)
                 {
-                    // Save trước khi stop
-                    _dashboard?.LogMessage($"[{TabId}] Saving before stop...");
-
                     try
                     {
                         SaveTestData();
                         _hasUnsavedChanges = false;
-                        _dashboard?.LogMessage($"[{TabId}] ✅ Data saved successfully");
                     }
                     catch (Exception ex)
                     {
@@ -545,11 +629,7 @@ namespace UITestKit
 
             var result = MessageBox.Show(
                 "Stop this Test Kit?\n\n" +
-                "This will:\n" +
-                "• Stop Client and Server processes\n" +
-                "• Close console windows\n" +
-                "• Hãy save testkit trước khi stop bởi 1 số message thừa sẽ được server hoặc client phản hồi khiến Output bị sai\n\n" +
-                "Continue?",
+                "This will stop all processes but you can still view the recorded data.",
                 "Confirm Stop",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question);
@@ -560,11 +640,18 @@ namespace UITestKit
             }
         }
 
-        /// <summary>
-        /// 🔑 ENHANCED: Save với update flag
-        /// </summary>
         private void BtnSave_Click(object sender, RoutedEventArgs e)
         {
+            if (_isReadOnly)
+            {
+                MessageBox.Show(
+                    "Cannot save in read-only mode.\n\nThis TestKit was loaded from a file.",
+                    "Read-Only Mode",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
             if (_recorderWindow == null)
             {
                 MessageBox.Show("RecorderWindow not initialized!", "Error",
@@ -576,10 +663,8 @@ namespace UITestKit
             {
                 SaveTestData();
 
-                _hasUnsavedChanges = false;
-
                 MessageBox.Show(
-                    $"Test data exported successfully!\n\n{GetLastExportPath()}",
+                    $"Test data exported successfully to Detail.xlsx!\n\n{_lastExportPath}",
                     "Export Success",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
@@ -595,11 +680,6 @@ namespace UITestKit
             }
         }
 
-        /// <summary>
-        /// 🔑 NEW METHOD: Extract save logic
-        /// </summary>
-        private string _lastExportPath = "";
-
         private void SaveTestData()
         {
             StatusText.Text = "💾 Exporting to Detail.xlsx...";
@@ -611,9 +691,11 @@ namespace UITestKit
 
                 _dashboard?.LogMessage($"[{TabId}] Exporting to: {detailFilePath}");
 
-                // 🔑 Simplified: Use wrapper method
                 var exporter = new ExcelExporter();
-                exporter.ExportTestKitData(detailFilePath, _recorderWindow.TestStages);
+
+                var sheetsData = PrepareDataForExport();
+
+                exporter.ExportToExcelParams(detailFilePath, sheetsData);
 
                 _lastExportPath = detailFilePath;
 
@@ -635,9 +717,57 @@ namespace UITestKit
                 throw;
             }
         }
-        private string GetLastExportPath()
+
+        private (string SheetName, ICollection<object> Data)[] PrepareDataForExport()
         {
-            return string.IsNullOrEmpty(_lastExportPath) ? "Unknown path" : _lastExportPath;
+            var sheetsList = new List<(string SheetName, ICollection<object> Data)>();
+
+            var allInputClients = new List<object>();
+            foreach (var stage in _recorderWindow.TestStages.OrderBy(s => s.Key))
+            {
+                foreach (var inputClient in stage.Value.InputClients)
+                {
+                    allInputClients.Add(inputClient);
+                }
+            }
+            if (allInputClients.Any())
+            {
+                sheetsList.Add(("InputClients", allInputClients));
+            }
+
+            var allOutputClients = new List<object>();
+            foreach (var stage in _recorderWindow.TestStages.OrderBy(s => s.Key))
+            {
+                foreach (var outputClient in stage.Value.OutputClients)
+                {
+                    allOutputClients.Add(outputClient);
+                }
+            }
+            if (allOutputClients.Any())
+            {
+                sheetsList.Add(("OutputClients", allOutputClients));
+            }
+
+            var allOutputServers = new List<object>();
+            foreach (var stage in _recorderWindow.TestStages.OrderBy(s => s.Key))
+            {
+                foreach (var outputServer in stage.Value.OutputServers)
+                {
+                    allOutputServers.Add(outputServer);
+                }
+            }
+            if (allOutputServers.Any())
+            {
+                sheetsList.Add(("OutputServers", allOutputServers));
+            }
+
+            return sheetsList.ToArray();
+        }
+
+        public void UpdateStatus(string message)
+        {
+            if (_isDisposed) return;
+            StatusText.Text = message;
         }
 
         public RecorderWindow GetRecorderWindow()
@@ -645,9 +775,6 @@ namespace UITestKit
             return _recorderWindow;
         }
 
-        /// <summary>
-        /// Force refresh bindings khi cần
-        /// </summary>
         public void RefreshBindings()
         {
             if (_isDisposed) return;
@@ -657,7 +784,6 @@ namespace UITestKit
                 var content = RecorderContentArea.Children[0] as DockPanel;
                 if (content != null)
                 {
-                    // Re-apply DataContext để trigger binding refresh
                     content.DataContext = null;
                     content.DataContext = _recorderWindow;
 

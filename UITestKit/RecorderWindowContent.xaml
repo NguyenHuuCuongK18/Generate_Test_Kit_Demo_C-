@@ -11,6 +11,9 @@
         <!-- Toolbar -->
         <Border Grid.Row="0" Background="#34495E" Padding="10">
             <StackPanel Orientation="Horizontal">
+                <Button Content="▶ Start Record" Padding="10,5" Margin="0,0,5,0" 
+                        x:Name="BtnStartRecord" Click="BtnStartRecord_Click"
+                        Background="#27AE60" Foreground="White" BorderThickness="0" Cursor="Hand"/>
                 <Button Content="⏹ Stop" Padding="10,5" Margin="0,0,5,0"
                         x:Name="BtnStopRecord" Click="BtnStopRecord_Click"
                         Background="#E74C3C" Foreground="White" BorderThickness="0" Cursor="Hand"/>
@@ -20,9 +23,8 @@
             </StackPanel>
         </Border>
 
-        <!-- Main Content Area - Wrapped in Grid for overlay support -->
+        <!-- Main Content Area -->
         <Border Grid.Row="1" BorderBrush="#BDC3C7" BorderThickness="1" Margin="10">
-            <!-- 🔑 IMPORTANT: Grid wrapper để có thể add overlay -->
             <Grid x:Name="RecorderContentArea">
                 <!-- Placeholder khi khởi tạo -->
                 <TextBlock Text="Initializing Test Kit..." 

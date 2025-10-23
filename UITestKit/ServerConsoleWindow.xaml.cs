@@ -1,5 +1,6 @@
 ﻿using System.Threading.Tasks;
 using System.Windows;
+using UITestKit.MiddlewareHandling;
 using UITestKit.ServiceExcute;
 
 namespace UITestKit
@@ -10,6 +11,7 @@ namespace UITestKit
     public partial class ServerConsoleWindow : Window
     {
         private readonly ExecutableManager _manager = ExecutableManager.Instance;
+        private readonly MiddlewareStart _middlewareStart = MiddlewareStart.Instance;
         public RecorderWindow Recorder { get;set; }
         public ServerConsoleWindow()
         {
@@ -21,11 +23,14 @@ namespace UITestKit
         private async void BtnEndServer_Click(object sender, RoutedEventArgs e)
         {
             Recorder?.AddActionStage("ServerClose");
+            await _middlewareStart.StopAsync();
             await _manager.StopServerAsync();
         }
 
-        private  void BtnStartServerAgain_Click(object sender, RoutedEventArgs e)
+        private  async void BtnStartServerAgain_Click(object sender, RoutedEventArgs e)
         {
+            Recorder?.AddActionStage("StartServer");
+            await _middlewareStart.StartAsync();
              _manager.StartServer();
         }
     }

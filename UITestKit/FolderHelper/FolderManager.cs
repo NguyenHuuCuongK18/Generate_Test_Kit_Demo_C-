@@ -1,10 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Windows.Controls;
-using System.Windows.Media;
+﻿using System.IO;
 using System.Windows;
+using System.Windows.Controls;
+using UITestKit.Model;
 
 namespace UITestKit.Services
 {
@@ -37,7 +34,7 @@ namespace UITestKit.Services
                     throw new ArgumentException("Project name cannot be empty", nameof(projectName));
 
                 ProjectName = projectName;
-                TestKitsRootFolder = Path.Combine(saveLocation, $"{projectName}_TestKits");
+                TestKitsRootFolder = Path.Combine(saveLocation, $"{projectName}");
 
                 if (!Directory.Exists(saveLocation))
                 {
@@ -139,6 +136,27 @@ namespace UITestKit.Services
                 worksheet.Column(2).AutoFit();
 
                 package.SaveAs(new FileInfo(filePath));
+            }
+        }
+
+        public void CreateFileIgnore()
+        {
+            string projectHeaderPath = Path.Combine(TestKitsRootFolder, "Ignore.xlsx");
+
+            using (var package = new OfficeOpenXml.ExcelPackage())
+            {
+                var worksheet = package.Workbook.Worksheets.Add("Sheet1");
+
+                worksheet.Cells["A1"].Value = "Ignore";
+                worksheet.Cells["A1"].Style.Font.Bold = true;
+                worksheet.Cells["A1"].Style.Font.Size = 11;
+                worksheet.Cells["A1"].Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+                worksheet.Cells["A1"].Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.LightBlue);
+
+                worksheet.Column(1).Width = 20;
+                worksheet.Column(2).AutoFit();
+
+                package.SaveAs(new FileInfo(projectHeaderPath));
             }
         }
 
@@ -412,7 +430,7 @@ namespace UITestKit.Services
                     string fileIcon = GetFileIcon(fileInfo.Extension);
                     string fileSize = FormatFileSize(fileInfo.Length);
 
-                    fileItem.Header = $"{fileIcon} {fileInfo.Name} ({fileSize})";
+                    fileItem.Header = $"{fileIcon} {fileInfo.Name} ";
 
                     parentItem.Items.Add(fileItem);
                 }
@@ -481,6 +499,296 @@ namespace UITestKit.Services
                 throw new ArgumentException("TestKit name is too long (max 100 characters)");
         }
 
+        #endregion
+
+        #region load detail testcase from excel
+        /// <summary>
+        /// 🔑 NEW: Load test data từ Detail.xlsx
+        /// </summary>
+        /// <summary>
+        /// 🔑 FIXED: Load test data từ Detail.xlsx với debug logging
+        /// </summary>
+        public Dictionary<int, TestStage> LoadTestDataFromDetailFile(string detailFilePath)
+        {
+            var testStages = new Dictionary<int, TestStage>();
+
+            try
+            {
+                if (!File.Exists(detailFilePath))
+                    throw new FileNotFoundException($"Detail.xlsx not found: {detailFilePath}");
+
+                OfficeOpenXml.ExcelPackage.LicenseContext = OfficeOpenXml.LicenseContext.NonCommercial;
+
+                using (var package = new OfficeOpenXml.ExcelPackage(new FileInfo(detailFilePath)))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[FolderManager] Opening Detail.xlsx: {detailFilePath}");
+                    System.Diagnostics.Debug.WriteLine($"[FolderManager] Total worksheets: {package.Workbook.Worksheets.Count}");
+
+                    // List all sheet names
+                    foreach (var ws in package.Workbook.Worksheets)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] Found sheet: '{ws.Name}'");
+                    }
+
+                    // Load InputClients sheet
+                    var inputSheet = package.Workbook.Worksheets["InputClients"];
+                    if (inputSheet != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] Loading InputClients sheet...");
+                        LoadInputClients(inputSheet, testStages);
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] InputClients loaded. Current stages count: {testStages.Count}");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] ⚠️ InputClients sheet NOT FOUND");
+                    }
+
+                    // Load OutputClients sheet
+                    var outputClientSheet = package.Workbook.Worksheets["OutputClients"];
+                    if (outputClientSheet != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] Loading OutputClients sheet...");
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] OutputClients rows: {outputClientSheet.Dimension?.Rows ?? 0}");
+                        LoadOutputClients(outputClientSheet, testStages);
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] OutputClients loaded");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] ⚠️ OutputClients sheet NOT FOUND");
+                    }
+
+                    // Load OutputServers sheet
+                    var outputServerSheet = package.Workbook.Worksheets["OutputServers"];
+                    if (outputServerSheet != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] Loading OutputServers sheet...");
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] OutputServers rows: {outputServerSheet.Dimension?.Rows ?? 0}");
+                        LoadOutputServers(outputServerSheet, testStages);
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] OutputServers loaded");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] ⚠️ OutputServers sheet NOT FOUND");
+                    }
+
+                    // Debug: Log loaded data
+                    foreach (var stage in testStages)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] Stage {stage.Key}:");
+                        System.Diagnostics.Debug.WriteLine($"  - InputClients: {stage.Value.InputClients.Count}");
+                        System.Diagnostics.Debug.WriteLine($"  - OutputClients: {stage.Value.OutputClients.Count}");
+                        System.Diagnostics.Debug.WriteLine($"  - OutputServers: {stage.Value.OutputServers.Count}");
+                    }
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[FolderManager] ✅ Loaded {testStages.Count} stages from Detail.xlsx");
+                return testStages;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FolderManager] ❌ Error loading Detail.xlsx: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[FolderManager] StackTrace: {ex.StackTrace}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Helper: Safe convert Excel cell value to int
+        /// </summary>
+        private int? SafeGetInt(object cellValue)
+        {
+            if (cellValue == null) return null;
+
+            if (cellValue is int intValue)
+                return intValue;
+
+            if (cellValue is double doubleValue)
+                return (int)doubleValue;
+
+            if (cellValue is decimal decimalValue)
+                return (int)decimalValue;
+
+            if (int.TryParse(cellValue.ToString(), out int parsedValue))
+                return parsedValue;
+
+            return null;
+        }
+
+        /// <summary>
+        /// Helper: Safe convert Excel cell value to string
+        /// </summary>
+        private string SafeGetString(object cellValue)
+        {
+            return cellValue?.ToString() ?? "";
+        }
+
+        private void LoadInputClients(OfficeOpenXml.ExcelWorksheet worksheet, Dictionary<int, TestStage> testStages)
+        {
+            int rowCount = worksheet.Dimension?.Rows ?? 0;
+            System.Diagnostics.Debug.WriteLine($"[FolderManager] LoadInputClients - Row count: {rowCount}");
+
+            if (rowCount < 2) return;
+
+            int loadedCount = 0;
+            for (int row = 2; row <= rowCount; row++)
+            {
+                try
+                {
+                    var stage = SafeGetInt(worksheet.Cells[row, 1].Value);
+
+                    if (!stage.HasValue || stage.Value <= 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] Row {row} - Skipping (invalid Stage: {worksheet.Cells[row, 1].Value})");
+                        continue;
+                    }
+
+                    if (!testStages.ContainsKey(stage.Value))
+                    {
+                        testStages[stage.Value] = new TestStage();
+                    }
+
+                    var inputClient = new Input_Client
+                    {
+                        Stage = stage.Value,
+                        Action = SafeGetString(worksheet.Cells[row, 2].Value),
+                        Input = SafeGetString(worksheet.Cells[row, 3].Value),
+                        DataType = SafeGetString(worksheet.Cells[row, 4].Value)
+                    };
+
+                    testStages[stage.Value].InputClients.Add(inputClient);
+                    loadedCount++;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[FolderManager] Row {row} - Error: {ex.Message}");
+                }
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[FolderManager] ✅ Loaded {loadedCount} InputClients");
+        }
+
+        private void LoadOutputClients(OfficeOpenXml.ExcelWorksheet worksheet, Dictionary<int, TestStage> testStages)
+        {
+            int rowCount = worksheet.Dimension?.Rows ?? 0;
+            System.Diagnostics.Debug.WriteLine($"[FolderManager] LoadOutputClients - Row count: {rowCount}");
+
+            if (rowCount < 2)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FolderManager] ⚠️ OutputClients sheet is empty (no data rows)");
+                return;
+            }
+
+            // Debug: Print header row
+            System.Diagnostics.Debug.WriteLine($"[FolderManager] OutputClients Headers:");
+            for (int col = 1; col <= 7; col++)
+            {
+                System.Diagnostics.Debug.WriteLine($"  Col {col}: {worksheet.Cells[1, col].Value}");
+            }
+
+            int loadedCount = 0;
+            for (int row = 2; row <= rowCount; row++)
+            {
+                try
+                {
+                    var stage = SafeGetInt(worksheet.Cells[row, 1].Value);
+
+                    if (!stage.HasValue || stage.Value <= 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] Row {row} - Skipping (invalid Stage: {worksheet.Cells[row, 1].Value})");
+                        continue;
+                    }
+
+                    if (!testStages.ContainsKey(stage.Value))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] Row {row} - Creating new TestStage for Stage {stage.Value}");
+                        testStages[stage.Value] = new TestStage();
+                    }
+
+                    var outputClient = new OutputClient
+                    {
+                        Stage = stage.Value,
+                        Method = SafeGetString(worksheet.Cells[row, 2].Value),
+                        StatusCode = SafeGetInt(worksheet.Cells[row, 3].Value) ?? 0,
+                        DataResponse = SafeGetString(worksheet.Cells[row, 4].Value),
+                        Output = SafeGetString(worksheet.Cells[row, 5].Value),
+                        DataTypeMiddleWare = SafeGetString(worksheet.Cells[row, 6].Value),
+                        ByteSize = SafeGetInt(worksheet.Cells[row, 7].Value) ?? 0
+                    };
+
+                    testStages[stage.Value].OutputClients.Add(outputClient);
+                    loadedCount++;
+
+                    System.Diagnostics.Debug.WriteLine($"[FolderManager] Row {row} - Loaded OutputClient: Stage={outputClient.Stage}, Method={outputClient.Method}");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[FolderManager] Row {row} - Error: {ex.Message}");
+                }
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[FolderManager] ✅ Loaded {loadedCount} OutputClients");
+        }
+
+        private void LoadOutputServers(OfficeOpenXml.ExcelWorksheet worksheet, Dictionary<int, TestStage> testStages)
+        {
+            int rowCount = worksheet.Dimension?.Rows ?? 0;
+            System.Diagnostics.Debug.WriteLine($"[FolderManager] LoadOutputServers - Row count: {rowCount}");
+
+            if (rowCount < 2)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FolderManager] ⚠️ OutputServers sheet is empty (no data rows)");
+                return;
+            }
+
+            // Debug: Print header row
+            System.Diagnostics.Debug.WriteLine($"[FolderManager] OutputServers Headers:");
+            for (int col = 1; col <= 7; col++)
+            {
+                System.Diagnostics.Debug.WriteLine($"  Col {col}: {worksheet.Cells[1, col].Value}");
+            }
+
+            int loadedCount = 0;
+            for (int row = 2; row <= rowCount; row++)
+            {
+                try
+                {
+                    var stage = SafeGetInt(worksheet.Cells[row, 1].Value);
+
+                    if (!stage.HasValue || stage.Value <= 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] Row {row} - Skipping (invalid Stage: {worksheet.Cells[row, 1].Value})");
+                        continue;
+                    }
+
+                    if (!testStages.ContainsKey(stage.Value))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[FolderManager] Row {row} - Creating new TestStage for Stage {stage.Value}");
+                        testStages[stage.Value] = new TestStage();
+                    }
+
+                    var outputServer = new OutputServer
+                    {
+                        Stage = stage.Value,
+                        Method = SafeGetString(worksheet.Cells[row, 2].Value),
+                        DataRequest = SafeGetString(worksheet.Cells[row, 4].Value),
+                        Output = SafeGetString(worksheet.Cells[row, 5].Value),
+                        DataTypeMiddleware = SafeGetString(worksheet.Cells[row, 6].Value),
+                        ByteSize = SafeGetInt(worksheet.Cells[row, 7].Value) ?? 0
+                    };
+
+                    testStages[stage.Value].OutputServers.Add(outputServer);
+                    loadedCount++;
+
+                    System.Diagnostics.Debug.WriteLine($"[FolderManager] Row {row} - Loaded OutputServer: Stage={outputServer.Stage}, Method={outputServer.Method}");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[FolderManager] Row {row} - Error: {ex.Message}");
+                }
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[FolderManager] ✅ Loaded {loadedCount} OutputServers");
+        }
         #endregion
 
         #region File Operations

@@ -2,6 +2,7 @@
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using UITestKit.MiddlewareHandling;
 using UITestKit.Service;
 using UITestKit.ServiceExcute;
 
@@ -13,6 +14,7 @@ namespace UITestKit
     public partial class ClientConsoleWindow : Window
     {
         private readonly ExecutableManager _manager = ExecutableManager.Instance;
+        private readonly MiddlewareStart _middleware = MiddlewareStart.Instance;
         public RecorderWindow Recorder { get; set; }
 
         public ClientConsoleWindow()
@@ -38,7 +40,9 @@ namespace UITestKit
             try
             {
                 Recorder?.AddActionStage("ClientClose");
+
                 await _manager.StopClientAsync();
+                await _middleware.StopAsync();
             }
             catch (Exception ex)
             {
@@ -51,7 +55,9 @@ namespace UITestKit
         {
             try
             {
-                 _manager.StartClient();
+                Recorder?.AddActionStage("StartClient");
+                _manager.StartClient();
+                _middleware.StartAsync();
                 MessageBox.Show("Client đã được khởi động lại thành công!");
             }
             catch (Exception ex)
